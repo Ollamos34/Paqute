@@ -316,6 +316,39 @@ function App() {
         setAttachments(prev => ({ ...prev, ...grouped }));
       }
 
+      // Race-fix: the send flow writes the `messages` row and the
+      // `message_attachments` rows in two separate awaits. If the user
+      // refreshes in that small gap, history load returns the message
+      // but the attachment row is missing, so the image appears gone
+      // until the next refresh. Detect that case (textless messages
+      // with no attachments) and re-query once after a short delay.
+      const needsRetry = ids.some(id => {
+        const msg = shaped.find(s => s.id === id);
+        const hasAtt = atts && atts.some(a => a.message_id === id);
+        return msg && !msg.text && !hasAtt;
+      });
+      if (!cancelled && needsRetry) {
+        setTimeout(async () => {
+          if (cancelled) return;
+          const { data: retryAtts } = await loadAttachments(ids);
+          if (cancelled || !retryAtts) return;
+          const grouped = {};
+          for (const a of retryAtts) {
+            (grouped[a.message_id] ||= []).push(a);
+          }
+          setAttachments(prev => {
+            // Only fill in slots that are still empty so we don't
+            // clobber attachment rows the realtime channel may have
+            // added in the meantime.
+            const next = { ...prev };
+            for (const [mid, list] of Object.entries(grouped)) {
+              if (!next[mid] || next[mid].length === 0) next[mid] = list;
+            }
+            return next;
+          });
+        }, 1500);
+      }
+
       // 3. subscribe to new messages in this chat
       if (messageChannelRef.current) {
         supabase.removeChannel(messageChannelRef.current);

@@ -441,10 +441,14 @@ create policy "avatars_update" on storage.objects
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
--- attachments bucket
+-- attachments bucket. The bucket MUST be public so URLs from
+-- getPublicUrl keep working after a page refresh — without a public
+-- bucket the static URL 403s and the image disappears. The
+-- ON CONFLICT DO UPDATE flips an existing dashboard-created private
+-- bucket to public.
 insert into storage.buckets (id, name, public)
   values ('attachments', 'attachments', true)
-  on conflict (id) do nothing;
+  on conflict (id) do update set public = excluded.public;
 
 drop policy if exists "attachments_storage_read" on storage.objects;
 drop policy if exists "attachments_storage_write" on storage.objects;

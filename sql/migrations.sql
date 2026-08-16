@@ -151,10 +151,14 @@ create policy "clears_write" on public.chat_clears for all    using (user_id = a
                                                           with check (user_id = auth.uid());
 
 -- 8. Storage bucket -----------------------------------------
--- Attachments bucket. Run via SQL only if your project has the storage extension.
+-- Attachments bucket. The bucket MUST be public so the URLs we store
+-- in message_attachments (from getPublicUrl) keep working after a
+-- page refresh — without a public bucket, the static URL 403s and
+-- the image disappears. The `ON CONFLICT DO UPDATE` flips an
+-- existing dashboard-created private bucket to public.
 insert into storage.buckets (id, name, public)
   values ('attachments', 'attachments', true)
-  on conflict (id) do nothing;
+  on conflict (id) do update set public = excluded.public;
 
 -- Storage policies: allow any authenticated user to upload/read their own folder.
 -- (Files are saved under <user_id>/<file> so the policy can match the prefix.)
