@@ -49,6 +49,42 @@
   gap: var(--space-xs);
 }
 
+.profile-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border, transparent);
+  background: var(--color-surface-hover);
+  color: var(--color-foreground);
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease;
+  max-width: 180px;
+}
+.profile-chip:hover {
+  background: var(--color-surface-hover, rgba(255,255,255,0.08));
+  transform: translateY(-1px);
+}
+.profile-chip:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+.profile-chip-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.profile-chip-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .icon-btn {
   width: 36px;
   height: 36px;

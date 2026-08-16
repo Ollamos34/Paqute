@@ -12,6 +12,7 @@ import {
   blockUser, unblockUser, muteChat, clearChat, deleteMessageForEveryone,
 } from './lib/messaging';
 import Login from './Login';
+import ProfileModal from './ProfileModal';
 import './App.css';
 
 // Special "profile id" used for the Saved Messages self-chat.
@@ -27,6 +28,8 @@ function App() {
   // --- Data from Supabase ---
   const [contacts, setContacts] = useState([]); // other users, shaped like old MOCK_CONTACTS
   const [onlineIds, setOnlineIds] = useState([]); // presence
+  const [myProfile, setMyProfile] = useState(null); // my own profile row
+  const [showProfile, setShowProfile] = useState(false);
 
   // --- Chat state ---
   const [activeChat, setActiveChat] = useState(null); // profile id of the person we're talking to (or SAVED_MESSAGES_ID)
@@ -158,16 +161,13 @@ function App() {
   // ============================================
   // CONTACTS: load every other profile
   // ============================================
-  useEffect(() => {
-    if (!session) return;
-
-    let cancelled = false;
-    supabase
+  const loadContacts = useCallback(() => {
+    if (!session) return Promise.resolve();
+    return supabase
       .from('profiles')
       .select('*')
       .neq('id', session.user.id)
       .then(({ data, error }) => {
-        if (cancelled) return;
         if (error) { console.error(error); return; }
         const shaped = (data || []).map(p => ({
           id: p.id,
@@ -179,9 +179,47 @@ function App() {
           online: false,
         }));
         setContacts(shaped);
-        if (shaped.length > 0 && !activeChat) setActiveChat(shaped[0].id);
       });
+  }, [session]);
 
+  useEffect(() => {
+    if (!session) return;
+
+    let cancelled = false;
+    loadContacts().then(() => {
+      if (cancelled) return;
+      // auto-pick first contact once we have any
+      setActiveChat(prev => {
+        if (prev) return prev;
+        return null;
+      });
+    });
+
+    return () => { cancelled = true; };
+  }, [session, loadContacts]);
+
+  // pick first contact once contacts load (separate so it doesn't re-fire on activeChat change)
+  useEffect(() => {
+    if (!session || activeChat) return;
+    if (contacts.length > 0) setActiveChat(contacts[0].id);
+  }, [contacts, activeChat, session]);
+
+  // ============================================
+  // MY PROFILE: load own row (for the ProfileModal and sidebar avatar)
+  // ============================================
+  useEffect(() => {
+    if (!session) { setMyProfile(null); return; }
+    let cancelled = false;
+    supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', session.user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) { console.error(error); return; }
+        setMyProfile(data);
+      });
     return () => { cancelled = true; };
   }, [session]);
 
@@ -755,6 +793,19 @@ function App() {
             >
               <X size={20} />
             </button>
+            <button
+              className="profile-chip"
+              onClick={() => setShowProfile(true)}
+              aria-label={t('profile') || 'Профиль'}
+              title={t('profile') || 'Профиль'}
+            >
+              <img
+                src={myProfile?.avatar_url || `https://i.pravatar.cc/150?u=${session.user.id}`}
+                alt={myProfile?.username || ''}
+                className="profile-chip-avatar"
+              />
+              <span className="profile-chip-name">{myProfile?.username || t('profile') || 'Профиль'}</span>
+            </button>
             <h2 className="sidebar-title">{t('chats')}</h2>
           </div>
           <div className="sidebar-header-actions">
@@ -1129,6 +1180,19 @@ function App() {
         onLanguageChange={setLanguage}
         t={t}
       />
+
+      {showProfile && (
+        <ProfileModal
+          session={session}
+          profile={myProfile}
+          onClose={() => setShowProfile(false)}
+          onUpdated={(updated) => {
+            setMyProfile(updated);
+            // pick up any avatar/name changes another user made next time list loads
+            loadContacts();
+          }}
+        />
+      )}
     </div>
   );
 }
