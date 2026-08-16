@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Paperclip, Search, MoreVertical, Moon, Sun, Menu, X, Star, Settings, LogOut, Globe, Check, Bookmark, Reply, AlertTriangle, FileText, Image as ImageIcon, Video, Music } from 'lucide-react';
+import { Send, Paperclip, Search, MoreVertical, Moon, Sun, Menu, X, Star, Settings, LogOut, Check, Bookmark, Reply, AlertTriangle, FileText, Image as ImageIcon, Video, Music } from 'lucide-react';
 import { getTranslation } from './i18n';
 import SettingsWindow from './components/SettingsWindow';
 import ChatMenu from './components/ChatMenu';
@@ -63,7 +63,7 @@ function App() {
   const [showFavorites, setShowFavorites] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
-  const [showLangMenu, setShowLangMenu] = useState(false);
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [showSettingsWindow, setShowSettingsWindow] = useState(false);
   const [appSettings, setAppSettings] = useState(() => {
     try {
@@ -85,7 +85,7 @@ function App() {
     };
   });
   const messagesEndRef = useRef(null);
-  const langMenuRef = useRef(null);
+  const headerMenuRef = useRef(null);
 
   const t = (key) => getTranslation(language, key);
 
@@ -438,17 +438,17 @@ function App() {
     if (theme !== appSettings.mode) setTheme(appSettings.mode);
   }, [appSettings]);
 
-  // close language menu on outside click
+  // close header menu on outside click
   useEffect(() => {
-    if (!showLangMenu) return;
+    if (!showHeaderMenu) return;
     const onDown = (e) => {
-      if (langMenuRef.current && !langMenuRef.current.contains(e.target)) {
-        setShowLangMenu(false);
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target)) {
+        setShowHeaderMenu(false);
       }
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [showLangMenu]);
+  }, [showHeaderMenu]);
 
   // re-format message timestamps when language changes
   useEffect(() => {
@@ -785,82 +785,84 @@ function App() {
       {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : 'closed'}`}>
         <div className="sidebar-header">
-          <div className="sidebar-header-left">
-            <button
-              className="icon-btn mobile-only"
-              onClick={() => setSidebarOpen(false)}
-              aria-label={t('closeMenu')}
-            >
-              <X size={20} />
-            </button>
-            <button
-              className="profile-chip"
-              onClick={() => setShowProfile(true)}
-              aria-label={t('profile') || 'Профиль'}
-              title={t('profile') || 'Профиль'}
-            >
-              <img
-                src={myProfile?.avatar_url || `https://i.pravatar.cc/150?u=${session.user.id}`}
-                alt={myProfile?.username || ''}
-                className="profile-chip-avatar"
-              />
+          <button
+            className="profile-chip"
+            onClick={() => setShowProfile(true)}
+            aria-label={t('profile') || 'Профиль'}
+            title={t('profile') || 'Профиль'}
+          >
+            <img
+              src={myProfile?.avatar_url || `https://i.pravatar.cc/150?u=${session.user.id}`}
+              alt={myProfile?.username || ''}
+              className="profile-chip-avatar"
+            />
+            <span className="profile-chip-meta">
               <span className="profile-chip-name">{myProfile?.username || t('profile') || 'Профиль'}</span>
-            </button>
-            <h2 className="sidebar-title">{t('chats')}</h2>
-          </div>
-          <div className="sidebar-header-actions">
-            <div className="lang-wrapper" ref={langMenuRef}>
-              <button
-                className={`lang-pill ${showLangMenu ? 'open' : ''}`}
-                onClick={() => setShowLangMenu(v => !v)}
-                aria-label={t('language')}
-                aria-expanded={showLangMenu}
-                aria-haspopup="listbox"
-              >
-                <Globe size={16} />
-                <span>{LANGUAGES.find(l => l.id === language)?.short || 'EN'}</span>
-              </button>
-              {showLangMenu && (
-                <div className="lang-dropdown" role="listbox">
-                  {LANGUAGES.map(l => (
-                    <button
-                      key={l.id}
-                      className={`lang-option ${language === l.id ? 'active' : ''}`}
-                      onClick={() => { setLanguage(l.id); setShowLangMenu(false); }}
-                      role="option"
-                      aria-selected={language === l.id}
-                    >
-                      <span>{l.label}</span>
-                      {language === l.id && <Check size={14} />}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+              <span className="profile-chip-sub">{t('chats')}</span>
+            </span>
+          </button>
+          <div className="header-menu-wrapper" ref={headerMenuRef}>
             <button
               className="icon-btn"
-              onClick={toggleTheme}
-              aria-label={theme === 'dark' ? t('lightTheme') : t('darkTheme')}
+              onClick={() => setShowHeaderMenu(v => !v)}
+              aria-label={t('more') || 'Меню'}
+              aria-expanded={showHeaderMenu}
+              aria-haspopup="menu"
             >
-              {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+              <MoreVertical size={20} />
             </button>
-            <button
-              className="icon-btn"
-              onClick={handleSearchToggle}
-              aria-label={t('search')}
-            >
-              <Search size={20} />
-            </button>
-            <button
-              className="icon-btn"
-              onClick={handleOpenSettingsWindow}
-              aria-label={t('settings')}
-            >
-              <Settings size={20} />
-            </button>
-            <button className="icon-btn" onClick={handleSignOut} aria-label={t('signOut')} title={t('signOut')}>
-              <LogOut size={20} />
-            </button>
+            {showHeaderMenu && (
+              <div className="header-menu" role="menu">
+                <button
+                  className="header-menu-item"
+                  onClick={() => { toggleTheme(); setShowHeaderMenu(false); }}
+                  role="menuitem"
+                >
+                  {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                  <span>{theme === 'dark' ? t('lightTheme') : t('darkTheme')}</span>
+                </button>
+                <div className="header-menu-divider" />
+                <div className="header-menu-section-label">{t('language')}</div>
+                {LANGUAGES.map(l => (
+                  <button
+                    key={l.id}
+                    className={`header-menu-item ${language === l.id ? 'active' : ''}`}
+                    onClick={() => { setLanguage(l.id); setShowHeaderMenu(false); }}
+                    role="menuitemradio"
+                    aria-checked={language === l.id}
+                  >
+                    <span>{l.label}</span>
+                    {language === l.id && <Check size={14} />}
+                  </button>
+                ))}
+                <div className="header-menu-divider" />
+                <button
+                  className="header-menu-item"
+                  onClick={() => { handleSearchToggle(); setShowHeaderMenu(false); }}
+                  role="menuitem"
+                >
+                  <Search size={16} />
+                  <span>{t('search')}</span>
+                </button>
+                <button
+                  className="header-menu-item"
+                  onClick={() => { handleOpenSettingsWindow(); setShowHeaderMenu(false); }}
+                  role="menuitem"
+                >
+                  <Settings size={16} />
+                  <span>{t('settings')}</span>
+                </button>
+                <div className="header-menu-divider" />
+                <button
+                  className="header-menu-item danger"
+                  onClick={() => { handleSignOut(); setShowHeaderMenu(false); }}
+                  role="menuitem"
+                >
+                  <LogOut size={16} />
+                  <span>{t('signOut')}</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
