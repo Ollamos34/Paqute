@@ -1,0 +1,71 @@
+.message-actions-toggle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  font-size: 16px;
+  line-height: 1;
+  transition: opacity 150ms ease, background 150ms ease;
+  cursor: pointer;
+}
+
+.message:hover .message-actions-toggle,
+.message:focus-within .message-actions-toggle,
+.message-actions-toggle:focus-visible {
+  opacity: 1;
+}
+
+.message-actions-toggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-foreground);
+}
+
+.message-actions {
+  position: absolute;
+  top: 28px;
+  right: 4px;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 50;
+  animation: slideDown 150ms ease;
+}
+
+.message-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  color: var(--color-foreground);
+  text-align: left;
+  background: transparent;
+  transition: background 150ms ease;
+  cursor: pointer;
+}
+
+.message-action:hover {
+  background: var(--color-surface-hover);
+}
+
+.message-action.danger {
+  color: #fca5a5;
+}
+.message-action.danger:hover {
+  background: rgba(220, 38, 38, 0.15);
+}
