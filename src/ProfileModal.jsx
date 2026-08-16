@@ -57,8 +57,7 @@ function ProfileModal({ session, profile, onClose, onUpdated }) {
           .from('avatars')
           .getPublicUrl(path);
 
-        // cache-bust so the new image shows immediately everywhere
-        avatarUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
+        avatarUrl = publicUrlData.publicUrl;
       }
 
       // 2. Update profile row
