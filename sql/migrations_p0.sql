@@ -104,6 +104,12 @@ create trigger trg_handle_new_user
 alter table public.messages
   add column if not exists client_id text;
 
+-- 3b. content column alias ------------------------------------
+-- The client reads `messages.content`; base schema has `text`.
+-- Add a generated column mirroring text so both read paths work.
+alter table public.messages
+  add column if not exists content text generated always as (text) stored;
+
 -- Unique per chat so the same client_id can be reused across
 -- different chats (e.g. after retry) without collision.
 create unique index if not exists uq_messages_chat_client_id

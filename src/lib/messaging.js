@@ -74,9 +74,11 @@ export async function addAttachment({ messageId, kind, url, fileName, mimeType, 
 }
 
 export async function deleteMessageForEveryone(messageId) {
+  // `content` is a generated column aliasing `text`, so we clear `text`
+  // and flip the flag. Postgres will recompute `content` from `text`.
   const { error } = await supabase
     .from('messages')
-    .update({ deleted_for_everyone: true, content: '', updated_at: new Date().toISOString() })
+    .update({ deleted_for_everyone: true, text: '', updated_at: new Date().toISOString() })
     .eq('id', messageId);
   return error ? err(error) : ok(true);
 }

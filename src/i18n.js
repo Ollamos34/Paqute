@@ -55,6 +55,7 @@ export const translations = {
     interfaceLanguage: 'Interface Language',
     chooseLanguage: 'Choose the language used across the app',
     selectChat: 'Select a chat',
+    selectChatHint: 'Select a chat to start messaging',
     appearanceTitle: 'Appearance',
     chatBg: 'Chat Background',
     // Errors & toasts
@@ -174,6 +175,7 @@ export const translations = {
     interfaceLanguage: 'Мова інтерфейсу',
     chooseLanguage: 'Оберіть мову інтерфейсу',
     selectChat: 'Оберіть чат',
+    selectChatHint: 'Оберіть чат, щоб почати спілкування',
     appearanceTitle: 'Зовнішній вигляд',
     chatBg: 'Фон чату',
     errorChatInit: 'Не вдалося відкрити чат. Спробуйте ще раз.',
@@ -288,6 +290,7 @@ export const translations = {
     interfaceLanguage: 'Язык интерфейса',
     chooseLanguage: 'Выберите язык интерфейса',
     selectChat: 'Выберите чат',
+    selectChatHint: 'Выберите чат, чтобы начать общение',
     appearanceTitle: 'Оформление',
     chatBg: 'Фон чата',
     errorChatInit: 'Не удалось открыть чат. Попробуйте ещё раз.',

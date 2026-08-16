@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Paperclip, Search, MoreVertical, Moon, Sun, Menu, X, Star, Settings, LogOut, Check, Bookmark, Reply, AlertTriangle, FileText, Image as ImageIcon, Video, Music } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Send, Paperclip, Search, MoreVertical, Moon, Sun, Menu, X, Star, Settings, LogOut, Check, Bookmark, Reply, AlertTriangle, FileText, Image as ImageIcon, Video, Music, Download, ZoomIn, X as XIcon } from 'lucide-react';
 import { getTranslation } from './i18n';
 import SettingsWindow from './components/SettingsWindow';
 import ChatMenu from './components/ChatMenu';
@@ -37,9 +37,11 @@ function App() {
   const [messages, setMessages] = useState({}); // profileId -> array of messages
   const [attachments, setAttachments] = useState({}); // messageId -> [attachments]
   const [blockedIds, setBlockedIds] = useState([]); // profile ids blocked by me
+  const [hiddenIds, setHiddenIds] = useState([]); // profile ids of chats I deleted
   const [mutedChats, setMutedChats] = useState([]); // chatIds I have muted
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
+  const [previewAtt, setPreviewAtt] = useState(null); // attachment shown in lightbox
   const [toast, setToast] = useState(null); // { kind:'info'|'error', text }
   const messageChannelRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -111,7 +113,7 @@ function App() {
 
   const filteredChats = (() => {
     const list = contacts.filter(chat => {
-      const matchesSearch = searchQuery === '' ||
+      if (hiddenIds.includes(chat.id)) return false;      const matchesSearch = searchQuery === '' ||
         chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (chat.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase());
 
@@ -172,7 +174,7 @@ function App() {
         const shaped = (data || []).map(p => ({
           id: p.id,
           name: p.username,
-          avatar: p.avatar_url || `https://i.pravatar.cc/150?u=${p.id}`,
+          avatar: p.avatar_url || null,
           lastMessage: '',
           timestamp: '',
           unread: 0,
@@ -188,21 +190,13 @@ function App() {
     let cancelled = false;
     loadContacts().then(() => {
       if (cancelled) return;
-      // auto-pick first contact once we have any
-      setActiveChat(prev => {
-        if (prev) return prev;
-        return null;
-      });
+      // Don't auto-pick a chat — let the user choose. If the user
+      // already had an active chat from this session, keep it.
+      setActiveChat(prev => prev || null);
     });
 
     return () => { cancelled = true; };
   }, [session, loadContacts]);
-
-  // pick first contact once contacts load (separate so it doesn't re-fire on activeChat change)
-  useEffect(() => {
-    if (!session || activeChat) return;
-    if (contacts.length > 0) setActiveChat(contacts[0].id);
-  }, [contacts, activeChat, session]);
 
   // ============================================
   // MY PROFILE: load own row (for the ProfileModal and sidebar avatar)
@@ -334,33 +328,57 @@ function App() {
               createdAt: m.created_at,
               timestamp: formatTs(m.created_at, language),
             };
+            // Decide which path to take BEFORE the setMessages updater
+            // (the updater must stay pure — mutating outer vars from
+            // inside it breaks React strict mode / concurrent renders).
+            const list = messages[activeChat] || [];
+            const ownIdx = shapedMsg.clientId
+              ? list.findIndex(x => x.clientId === shapedMsg.clientId && x.pending)
+              : -1;
+            const isDuplicate = ownIdx === -1 && list.some(x => x.id === shapedMsg.id);
+            const mergedOwn = ownIdx !== -1;
             setMessages(prev => {
-              const list = prev[activeChat] || [];
-              // 1) If we already have a row by id (Postgres echoes our
-              //    own insert), swap the optimistic row in place so we
-              //    keep the user's pending state (e.g. attachments).
-              if (shapedMsg.clientId) {
-                const idx = list.findIndex(
-                  x => x.clientId === shapedMsg.clientId && x.pending
-                );
-                if (idx !== -1) {
-                  const next = list.slice();
-                  // Spread optimistic first, then shapedMsg, so the
-                  // canonical id/timestamp win but pending attachments
-                  // already on the optimistic row survive.
-                  next[idx] = {
-                    ...next[idx],
-                    ...shapedMsg,
-                    pending: false,
-                    failed: false,
-                  };
-                  return { ...prev, [activeChat]: next };
-                }
+              const cur = prev[activeChat] || [];
+              if (mergedOwn) {
+                const next = cur.slice();
+                next[ownIdx] = {
+                  ...next[ownIdx],
+                  ...shapedMsg,
+                  pending: false,
+                  failed: false,
+                };
+                return { ...prev, [activeChat]: next };
               }
-              // 2) Otherwise, dedupe by id.
-              if (list.some(existing => existing.id === shapedMsg.id)) return prev;
-              return { ...prev, [activeChat]: [...list, shapedMsg] };
+              if (isDuplicate) return prev;
+              return { ...prev, [activeChat]: [...cur, shapedMsg] };
             });
+            if (mergedOwn) {
+              // Remap temp attachments keyed by clientId over to the
+              // canonical real id so the message keeps showing its
+              // attachments after the id swap.
+              setAttachments(prevAtts => {
+                const tmp = prevAtts[shapedMsg.clientId];
+                if (!tmp) return prevAtts;
+                const nextAtts = { ...prevAtts };
+                delete nextAtts[shapedMsg.clientId];
+                nextAtts[shapedMsg.id] = tmp;
+                return nextAtts;
+              });
+            }
+            // Fetch attachments for newly-arrived messages. The initial
+            // history load covers messages that already existed when the
+            // chat opened, but realtime INSERTs for messages sent after
+            // open need their attachments pulled on demand — otherwise
+            // the receiver sees a "blank" message with no image/file.
+            // Skip when the sender's own optimistic path already
+            // remapped temp attachments onto this id.
+            (async () => {
+              if (mergedOwn) return;
+              const { data: newAtts } = await loadAttachments([shapedMsg.id]);
+              if (!cancelled && newAtts && newAtts.length) {
+                setAttachments(prev => ({ ...prev, [shapedMsg.id]: newAtts }));
+              }
+            })();
             if (!isSavedChat) {
               setContacts(prev => prev.map(c =>
                 c.id === activeChat
@@ -522,7 +540,27 @@ function App() {
       ...prev,
       [activeChat]: [...(prev[activeChat] || []), optimistic],
     }));
-    setReplyTo(null);
+    // Surface attachments on the optimistic row immediately (keyed by
+    // clientId) so a freshly selected image renders without waiting
+    // for the realtime echo to swap ids.
+    if (opts.attachments && opts.attachments.length) {
+      const tempAtts = opts.attachments.map((a, i) => ({
+        id: `tmp-${clientId}-${i}`,
+        message_id: clientId,
+        kind: a.kind,
+        url: a.url,
+        file_name: a.fileName,
+        mime_type: a.mimeType,
+        size_bytes: a.sizeBytes,
+        meta: {},
+        created_at: new Date().toISOString(),
+        _tmp: true,
+      }));
+      setAttachments(prev => ({ ...prev, [clientId]: tempAtts }));
+    }
+    // NOTE: do NOT clear replyTo here — if the DB insert fails, the
+    // user should still see what they were replying to and be able to
+    // retry without losing context. Clear it on success below.
 
     const { data: real, error } = await sendMessageDb({
       chatId,
@@ -541,8 +579,12 @@ function App() {
         ),
       }));
       showToast(t('errorSend'), 'error');
+      // Keep replyTo intact so user can retry.
       return null;
     }
+
+    // Clear reply context now that the message landed.
+    setReplyTo(null);
 
     // swap optimistic row for the real one (keep any pending attachments)
     setMessages(prev => ({
@@ -556,6 +598,7 @@ function App() {
 
     // link attachments
     if (opts.attachments && opts.attachments.length) {
+      const insertedAtts = [];
       for (const att of opts.attachments) {
         const { data: newAtt, error: attErr } = await supabase
           .from('message_attachments')
@@ -568,9 +611,20 @@ function App() {
             size_bytes: att.sizeBytes,
           })
           .select().single();
-        if (!attErr && newAtt) {
-          setAttachments(prev => ({ ...prev, [real.id]: [...(prev[real.id] || []), newAtt] }));
-        }
+        if (!attErr && newAtt) insertedAtts.push(newAtt);
+      }
+      // Replace any temp attachments (keyed by clientId) with the real
+      // DB rows so the message shows the canonical attachment records.
+      // Realtime echo may have already remapped clientId → real.id; if
+      // so, the newAtt rows would duplicate. We overwite that slot
+      // entirely with the freshly-inserted rows.
+      if (insertedAtts.length) {
+        setAttachments(prev => {
+          const next = { ...prev };
+          delete next[clientId];
+          next[real.id] = insertedAtts;
+          return next;
+        });
       }
     }
 
@@ -705,7 +759,6 @@ function App() {
   const handleDeleteChat = async () => {
     if (!activeChat || isSavedChat || !session) return;
     if (!window.confirm(t('confirmDelete'))) return;
-    // For simplicity: clear locally. Full delete needs a server-side RPC.
     const msgIds = (messages[activeChat] || []).map(m => m.id);
     setMessages(prev => ({ ...prev, [activeChat]: [] }));
     if (msgIds.length) {
@@ -715,9 +768,12 @@ function App() {
         return next;
       });
     }
-    setContacts(prev => prev.filter(c => c.id !== activeChat));
+    await supabase.from('hidden_chats').upsert({
+      user_id: session.user.id,
+      chat_id: activeChat,
+    });
+    setHiddenIds(prev => [...prev, activeChat]);
     setFavorites(prev => prev.filter(id => id !== activeChat));
-    setChatIdMap(prev => { const next = { ...prev }; delete next[activeChat]; return next; });
     showToast(t('chatDeleted'), 'info');
     setChatMenuOpen(false);
     setActiveChat(null);
@@ -731,6 +787,16 @@ function App() {
       .select('blocked_id')
       .eq('blocker_id', session.user.id)
       .then(({ data }) => setBlockedIds((data || []).map(r => r.blocked_id)));
+  }, [session]);
+
+ // load my hidden (deleted) chats once
+  useEffect(() => {
+    if (!session) return;
+    supabase
+      .from('hidden_chats')
+      .select('chat_id')
+      .eq('user_id', session.user.id)
+      .then(({ data }) => setHiddenIds((data || []).map(r => r.chat_id)));
   }, [session]);
 
   const toggleTheme = () => {
@@ -791,9 +857,10 @@ function App() {
             aria-label={t('profile') || 'Профиль'}
             title={t('profile') || 'Профиль'}
           >
-            <img
-              src={myProfile?.avatar_url || `https://i.pravatar.cc/150?u=${session.user.id}`}
-              alt={myProfile?.username || ''}
+            <Avatar
+              src={myProfile?.avatar_url}
+              name={myProfile?.username || ''}
+              size={30}
               className="profile-chip-avatar"
             />
             <span className="profile-chip-meta">
@@ -801,6 +868,10 @@ function App() {
               <span className="profile-chip-sub">{t('chats')}</span>
             </span>
           </button>
+          <div className="sidebar-brand">
+            <div className="sidebar-brand-mark" aria-hidden>φ</div>
+            <span className="sidebar-brand-name">Paqute</span>
+          </div>
           <div className="header-menu-wrapper" ref={headerMenuRef}>
             <button
               className="icon-btn"
@@ -809,7 +880,7 @@ function App() {
               aria-expanded={showHeaderMenu}
               aria-haspopup="menu"
             >
-              <MoreVertical size={20} />
+              <MoreVertical size={18} />
             </button>
             {showHeaderMenu && (
               <div className="header-menu" role="menu">
@@ -918,7 +989,7 @@ function App() {
                     </div>
                   ) : (
                     <>
-                      <img src={chat.avatar} alt={chat.name} className="chat-avatar" />
+                      <Avatar src={chat.avatar} name={chat.name} size={40} className="chat-avatar" />
                       {chat.online && <span className="online-indicator" />}
                     </>
                   )}
@@ -953,7 +1024,7 @@ function App() {
                 </div>
               ) : (
                 <>
-                  <img src={activeContact?.avatar} alt={activeContact?.name} className="chat-avatar" />
+                  <Avatar src={activeContact?.avatar} name={activeContact?.name} size={40} className="chat-avatar" />
                   {activeContact?.online && <span className="online-indicator" />}
                 </>
               )}
@@ -1013,7 +1084,17 @@ function App() {
           </div>
         </header>
 
-        {isSavedChat ? (
+        {!activeChat ? (
+          <div className="chat-empty">
+            <div className="chat-empty-inner">
+              <div className="chat-empty-mark" aria-hidden>
+                <Send size={28} />
+              </div>
+              <h2 className="chat-empty-title">{t('selectChat')}</h2>
+              <p className="chat-empty-hint">{t('selectChatHint') || 'Select a chat to start messaging'}</p>
+            </div>
+          </div>
+        ) : isSavedChat ? (
           <SavedMessages
             ref={savedItemsRef}
             userId={session.user.id}
@@ -1078,7 +1159,13 @@ function App() {
                       {(attachments[msg.id] || []).length > 0 && (
                         <div className="message-attachments">
                           {(attachments[msg.id] || []).map(att => (
-                            <AttachmentView key={att.id} att={att} t={t} lang={language} />
+                            <AttachmentView
+                              key={att.id}
+                              att={att}
+                              t={t}
+                              lang={language}
+                              onPreview={setPreviewAtt}
+                            />
                           ))}
                         </div>
                       )}
@@ -1099,7 +1186,7 @@ function App() {
                         onReply={() => setReplyTo(msg)}
                         onForward={() => { navigator.clipboard.writeText(msg.text || ''); showToast(t('forwardCopied'), 'info'); }}
                         onSaveToSaved={async () => {
-                          await saveMessageToSaved(msg);
+                          await saveMessageToSaved(msg, attachments[msg.id] || []);
                           showToast(t('savedToSaved'), 'info');
                         }}
                         onDeleteForEveryone={async () => {
@@ -1173,6 +1260,14 @@ function App() {
         <div className={`toast toast-${toast.kind}`}>{toast.text}</div>
       )}
 
+      {previewAtt && (
+        <AttachmentPreview
+          att={previewAtt}
+          t={t}
+          onClose={() => setPreviewAtt(null)}
+        />
+      )}
+
       <SettingsWindow
         isOpen={showSettingsWindow}
         onClose={handleCloseSettingsWindow}
@@ -1200,28 +1295,165 @@ function App() {
 }
 
 // helper components defined out-of-render to avoid remount churn
-function AttachmentView({ att, t, lang }) {
+function AttachmentView({ att, t, lang, onPreview }) {
   const icon = att.kind === 'image' ? <ImageIcon size={18} />
     : att.kind === 'video' ? <Video size={18} />
     : att.kind === 'audio' ? <Music size={18} />
     : <FileText size={18} />;
-  if (att.kind === 'image') {
-    return <a className="attachment attachment-image" href={att.url} target="_blank" rel="noreferrer"><img src={att.url} alt={att.file_name || ''} /></a>;
+  const name = att.file_name || t('file');
+  const canPreview = att.kind === 'image' || att.kind === 'video'
+    || (att.mime_type && /\.(png|jpe?g|gif|webp|svg|bmp|ico|heic|heif|avif)$/i.test(att.file_name || ''))
+    || (att.mime_type || '').startsWith('image/')
+    || (att.mime_type || '').startsWith('video/');
+  const handlePreview = (e) => {
+    if (!canPreview) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onPreview?.(att);
+  };
+  if (att.kind === 'image' || (att.mime_type || '').startsWith('image/')) {
+    return (
+      <button
+        type="button"
+        className="attachment attachment-image"
+        onClick={handlePreview}
+        title={name}
+      >
+        <img src={att.url} alt={name} loading="lazy" />
+        <span className="attachment-image-zoom" aria-hidden><ZoomIn size={14} /></span>
+      </button>
+    );
   }
-  if (att.kind === 'video') {
-    return <video className="attachment attachment-video" src={att.url} controls preload="metadata" />;
+  if (att.kind === 'video' || (att.mime_type || '').startsWith('video/')) {
+    return (
+      <div className="attachment attachment-video-wrap">
+        <video className="attachment attachment-video" src={att.url} controls preload="metadata" />
+        <button
+          type="button"
+          className="attachment-preview-btn"
+          onClick={handlePreview}
+          title={t('preview') || 'Preview'}
+          aria-label={t('preview') || 'Preview'}
+        >
+          <ZoomIn size={14} />
+        </button>
+      </div>
+    );
   }
-  if (att.kind === 'audio') {
+  if (att.kind === 'audio' || (att.mime_type || '').startsWith('audio/')) {
     return <audio className="attachment attachment-audio" src={att.url} controls preload="metadata" />;
   }
   return (
-    <a className="attachment attachment-file" href={att.url} target="_blank" rel="noreferrer">
-      {icon}
+    <div className="attachment attachment-file" title={name}>
+      <span className="attachment-file-icon" aria-hidden>{icon}</span>
       <div className="attachment-file-info">
-        <span className="attachment-file-name">{att.file_name || t('file')}</span>
+        <span className="attachment-file-name">{name}</span>
         <span className="attachment-file-size">{formatBytes(att.size_bytes, lang)}</span>
       </div>
-    </a>
+      <button
+        type="button"
+        className="attachment-download-btn"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); downloadAttachment(att); }}
+        title={t('download') || 'Download'}
+        aria-label={t('download') || 'Download'}
+      >
+        <Download size={16} />
+      </button>
+    </div>
+  );
+}
+
+// Fetch a cross-origin Supabase URL and save it as a blob so the
+// browser's download uses the original file_name (the public URL
+// doesn't carry Content-Disposition, so a plain `<a download>` would
+// otherwise fall back to the URL's last path segment).
+async function downloadAttachment(att) {
+  try {
+    const res = await fetch(att.url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = att.file_name || 'download';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  } catch (err) {
+    // Fallback: open in a new tab so the user can save manually.
+    console.error('download failed, opening in new tab:', err);
+    window.open(att.url, '_blank', 'noopener,noreferrer');
+  }
+}
+
+function AttachmentPreview({ att, t, onClose }) {
+  // Close on ESC.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  // Close only when the user clicks the backdrop itself, not when a
+  // click bubbles up from the toolbar/stage. Track where the mousedown
+  // started — if it began on the overlay (not a descendant), it's a
+  // backdrop click and we close.
+  const overlayRef = useRef(null);
+  const handleMouseDown = (e) => {
+    if (e.target === overlayRef.current) {
+      // mark that the next click on the overlay should close
+      e.currentTarget.dataset.backdrop = '1';
+    }
+  };
+  const handleClick = (e) => {
+    if (e.currentTarget.dataset.backdrop === '1') {
+      delete e.currentTarget.dataset.backdrop;
+      onClose();
+    }
+  };
+  const name = att.file_name || t('file') || 'file';
+  const isVideo = att.kind === 'video' || (att.mime_type || '').startsWith('video/');
+  return (
+    <div
+      ref={overlayRef}
+      className="attachment-preview-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('preview') || 'Preview'}
+      onMouseDown={handleMouseDown}
+      onClick={handleClick}
+    >
+      <div className="attachment-preview-toolbar" onClick={(e) => e.stopPropagation()}>
+        <span className="attachment-preview-name" title={name}>{name}</span>
+        <div className="attachment-preview-actions">
+          <button
+            type="button"
+            className="attachment-preview-action"
+            onClick={() => downloadAttachment(att)}
+            title={t('download') || 'Download'}
+            aria-label={t('download') || 'Download'}
+          >
+            <Download size={18} />
+          </button>
+          <button
+            type="button"
+            className="attachment-preview-action"
+            onClick={onClose}
+            title={t('close') || 'Close'}
+            aria-label={t('close') || 'Close'}
+          >
+            <XIcon size={18} />
+          </button>
+        </div>
+      </div>
+      <div className="attachment-preview-stage" onClick={(e) => e.stopPropagation()}>
+        {isVideo ? (
+          <video className="attachment-preview-media" src={att.url} controls autoPlay />
+        ) : (
+          <img className="attachment-preview-media" src={att.url} alt={name} />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1245,14 +1477,95 @@ function formatBytes(n, lang) {
 }
 
 // forwarding helper used by MessageActions
-async function saveMessageToSaved(msg) {
+// Saves a message into the user's private "Saved Messages" store,
+// carrying over attachments so images/files round-trip with the note.
+async function saveMessageToSaved(msg, attachments = []) {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return;
+  const firstAtt = attachments[0];
+  const kind = firstAtt
+    ? (firstAtt.kind === 'image' ? 'image'
+       : firstAtt.kind === 'video' ? 'video'
+       : firstAtt.kind === 'audio' ? 'document'
+       : 'document')
+    : (msg.text ? 'note' : 'forward');
   await supabase.from('saved_messages').insert({
     user_id: session.user.id,
-    kind: msg.text ? 'note' : 'forward',
+    kind,
     text: msg.text || null,
+    url: firstAtt?.url || null,
+    file_name: firstAtt?.file_name || null,
+    mime_type: firstAtt?.mime_type || null,
+    size_bytes: firstAtt?.size_bytes || null,
   });
+}
+
+// Avatar: img if src exists, otherwise a Discord-style default avatar.
+// The default is a single-letter monogram on a deterministic color
+// picked from a small palette indexed by a hash of the name, so every
+// new user gets one of a handful of colors and the choice is stable
+// across sessions and devices. Adding ?v= to src busts the HTTP cache
+// so freshly uploaded avatars appear immediately.
+const DEFAULT_AVATAR_COLORS = [
+  '#1abc9c', '#3498db', '#9b59b6', '#e91e63',
+  '#f1c40f', '#e67e22', '#e74c3c', '#2ecc71',
+];
+
+function defaultAvatarColor(seed = '') {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return DEFAULT_AVATAR_COLORS[hash % DEFAULT_AVATAR_COLORS.length];
+}
+
+function Avatar({ src, name = '', size = 40, className }) {
+  const letter = (name || '?').trim()[0]?.toUpperCase() || '?';
+  // Bust cache ONLY when `src` changes (avatar re-upload), not every render.
+  // Re-rendering with a new Date.now() URL causes every avatar to be
+  // re-fetched on each parent state update.
+  const url = useMemo(() => {
+    if (!src) return null;
+    const sep = src.includes('?') ? '&' : '?';
+    return `${src}${sep}v=${Date.now().toString(36)}`;
+  }, [src]);
+  const [errored, setErrored] = useState(false);
+  useEffect(() => { setErrored(false); }, [src]);
+
+  if (url && !errored) {
+    return (
+      <img
+        src={url}
+        alt={name}
+        className={className}
+        style={{ width: size, height: size, objectFit: 'cover' }}
+        onError={() => setErrored(true)}
+      />
+    );
+  }
+  return (
+    <div
+      className={className}
+      aria-label={name}
+      style={{
+        width: size,
+        height: size,
+        background: defaultAvatarColor(name),
+        color: '#fff',
+        fontSize: Math.max(11, Math.round(size * 0.46)),
+        fontWeight: 600,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: '50%',
+        userSelect: 'none',
+        flexShrink: 0,
+        letterSpacing: '0.02em',
+      }}
+    >
+      {letter}
+    </div>
+  );
 }
 
 export default App;

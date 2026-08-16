@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
 import { X, Camera, Loader2 } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import './ProfileModal.css';
 
-// Usage: <ProfileModal session={session} profile={myProfile} onClose={...} onUpdated={(p) => setMyProfile(p)} />
 function ProfileModal({ session, profile, onClose, onUpdated }) {
   const [username, setUsername] = useState(profile?.username || '');
   const [avatarPreview, setAvatarPreview] = useState(profile?.avatar_url || null);
@@ -16,11 +16,11 @@ function ProfileModal({ session, profile, onClose, onUpdated }) {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      setError('Выбери файл изображения (jpg, png, webp и т.п.)');
+      setError('Please choose an image file (jpg, png, webp, etc.)');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setError('Файл слишком большой (максимум 5 МБ)');
+      setError('File is too large (max 5 MB)');
       return;
     }
 
@@ -32,8 +32,8 @@ function ProfileModal({ session, profile, onClose, onUpdated }) {
   const handleSave = async () => {
     setError('');
 
-    if (!username.trim() || username.trim().length < 1) {
-      setError('Имя пользователя не может быть пустым');
+    if (!username.trim()) {
+      setError('Username cannot be empty');
       return;
     }
 
@@ -42,14 +42,16 @@ function ProfileModal({ session, profile, onClose, onUpdated }) {
     try {
       let avatarUrl = profile?.avatar_url || null;
 
-      // 1. Upload new avatar if one was picked
+      // 1. Upload new avatar if one was picked.
+      // Use a unique path so each upload replaces the previous file
+      // in storage and the browser cache is naturally busted.
       if (avatarFile) {
-        const ext = avatarFile.name.split('.').pop();
-        const path = `${session.user.id}/avatar.${ext}`;
+        const ext = (avatarFile.name.split('.').pop() || 'jpg').toLowerCase();
+        const path = `${session.user.id}/${Date.now()}.${ext}`;
 
         const { error: uploadError } = await supabase.storage
           .from('avatars')
-          .upload(path, avatarFile, { upsert: true });
+          .upload(path, avatarFile, { upsert: false });
 
         if (uploadError) throw uploadError;
 
@@ -60,13 +62,12 @@ function ProfileModal({ session, profile, onClose, onUpdated }) {
         avatarUrl = publicUrlData.publicUrl;
       }
 
-      // 2. Update profile row
+      // 2. Update profile row.
       const { data, error: updateError } = await supabase
         .from('profiles')
         .update({
           username: username.trim(),
           avatar_url: avatarUrl,
-          updated_at: new Date().toISOString(),
         })
         .eq('id', session.user.id)
         .select()
@@ -77,40 +78,45 @@ function ProfileModal({ session, profile, onClose, onUpdated }) {
       onUpdated?.(data);
       onClose();
     } catch (err) {
-      // Unique username collisions land here (Postgres unique_violation = 23505)
       if (err.code === '23505') {
-        setError('Это имя пользователя уже занято');
+        setError('That username is already taken');
       } else {
-        setError(err.message || 'Не удалось сохранить профиль');
+        setError(err.message || 'Could not save profile');
       }
     } finally {
       setSaving(false);
     }
   };
 
+  const letter = (username?.[0] || '?').toUpperCase();
+
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.header}>
-          <h2 style={styles.title}>Профиль</h2>
-          <button style={styles.closeBtn} onClick={onClose} aria-label="Закрыть">
+    <div className="profile-overlay" onClick={onClose}>
+      <div className="profile-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="profile-header">
+          <h2 className="profile-title">Profile</h2>
+          <button className="profile-close" onClick={onClose} aria-label="Close">
             <X size={20} />
           </button>
         </div>
 
-        <div style={styles.avatarSection}>
+        <div className="profile-avatar-section">
           <div
-            style={styles.avatarWrapper}
+            className="profile-avatar-wrap"
             onClick={() => fileInputRef.current?.click()}
           >
             {avatarPreview ? (
-              <img src={avatarPreview} alt="avatar" style={styles.avatarImg} />
+              <img src={avatarPreview} alt="avatar" />
             ) : (
-              <div style={styles.avatarPlaceholder}>
-                {username?.[0]?.toUpperCase() || '?'}
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+                fontSize: 36, fontWeight: 600,
+              }}>
+                {letter}
               </div>
             )}
-            <div style={styles.avatarOverlay}>
+            <div className="profile-avatar-overlay">
               <Camera size={22} color="#fff" />
             </div>
           </div>
@@ -121,71 +127,26 @@ function ProfileModal({ session, profile, onClose, onUpdated }) {
             style={{ display: 'none' }}
             onChange={handleFileChange}
           />
-          <p style={styles.hint}>Нажми на фото, чтобы изменить</p>
+          <p className="profile-hint">Click the photo to change it</p>
         </div>
 
-        <label style={styles.label}>Имя пользователя</label>
+        <label className="profile-label">Username</label>
         <input
-          style={styles.input}
+          className="profile-input"
           type="text"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          placeholder="Твоё имя"
+          placeholder="Your name"
         />
 
-        {error && <p style={styles.error}>{error}</p>}
+        {error && <p className="profile-error">{error}</p>}
 
-        <button style={styles.saveBtn} onClick={handleSave} disabled={saving}>
-          {saving ? <Loader2 size={18} className="spin" /> : 'Сохранить'}
+        <button className="profile-save" onClick={handleSave} disabled={saving}>
+          {saving ? <Loader2 size={18} className="spin" /> : 'Save'}
         </button>
       </div>
     </div>
   );
 }
-
-const styles = {
-  overlay: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-  },
-  modal: {
-    width: 360, background: '#1a1d24', borderRadius: 16, padding: 24,
-    display: 'flex', flexDirection: 'column', gap: 14,
-  },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  title: { color: '#fff', fontSize: 18, margin: 0 },
-  closeBtn: {
-    background: 'none', border: 'none', color: '#9aa0ab', cursor: 'pointer',
-    display: 'flex', padding: 4,
-  },
-  avatarSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 },
-  avatarWrapper: {
-    position: 'relative', width: 96, height: 96, borderRadius: '50%',
-    cursor: 'pointer', overflow: 'hidden',
-  },
-  avatarImg: { width: '100%', height: '100%', objectFit: 'cover' },
-  avatarPlaceholder: {
-    width: '100%', height: '100%', borderRadius: '50%',
-    background: '#2563EB', color: '#fff', fontSize: 32, fontWeight: 600,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  avatarOverlay: {
-    position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    opacity: 0, transition: 'opacity 0.15s',
-  },
-  hint: { color: '#9aa0ab', fontSize: 12, margin: 0 },
-  label: { color: '#9aa0ab', fontSize: 13 },
-  input: {
-    padding: '10px 12px', borderRadius: 8, border: '1px solid #333',
-    background: '#22252d', color: '#fff', fontSize: 14,
-  },
-  error: { color: '#ff6b6b', fontSize: 13, margin: 0 },
-  saveBtn: {
-    padding: '10px 12px', borderRadius: 8, border: 'none',
-    background: '#2563EB', color: '#fff', fontSize: 14, fontWeight: 600,
-    cursor: 'pointer', marginTop: 6,
-  },
-};
 
 export default ProfileModal;
