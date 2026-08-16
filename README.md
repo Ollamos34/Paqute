@@ -33,9 +33,4 @@
 
 ---
 
-## 🚀 Быстрый старт
-
-### 1. Клонирование репозитория
-```bash
-git clone [https://github.com/your-username/messenger-app.git](https://github.com/your-username/messenger-app.git)
-cd messenger-app
+#
