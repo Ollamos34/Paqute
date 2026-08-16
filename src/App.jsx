@@ -46,6 +46,11 @@ function App() {
   const messageChannelRef = useRef(null);
   const fileInputRef = useRef(null);
   const savedItemsRef = useRef(null); // imperative ref for SavedMessages panel
+  // Set of message_ids known to belong to the currently-open chat.
+  // Used by the message_attachments realtime handler to drop events
+  // for attachments of messages in OTHER chats (realtime can't filter
+  // attachments by chat_id because that join isn't supported).
+  const chatMessageIdsRef = useRef(new Set());
 
   const [inputValue, setInputValue] = useState('');
   const [theme, setTheme] = useState(() => {
@@ -113,7 +118,8 @@ function App() {
 
   const filteredChats = (() => {
     const list = contacts.filter(chat => {
-      if (hiddenIds.includes(chat.id)) return false;      const matchesSearch = searchQuery === '' ||
+      if (hiddenIds.includes(chat.id)) return false;
+      const matchesSearch = searchQuery === '' ||
         chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (chat.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase());
 
@@ -289,6 +295,9 @@ function App() {
       // If a history row carries a client_id we already have an
       // optimistic row for, prefer the history row (it has the
       // canonical id/timestamp) and drop the optimistic duplicate.
+      // Seed chatMessageIdsRef with history ids so the attachments
+      // realtime handler accepts rows belonging to this chat.
+      chatMessageIdsRef.current = new Set(shaped.map(s => s.id));
       setMessages(prev => {
         const optimistic = (prev[activeChat] || []).filter(
           m => m.pending && m.clientId && !shaped.some(s => s.clientId === m.clientId)
@@ -328,18 +337,25 @@ function App() {
               createdAt: m.created_at,
               timestamp: formatTs(m.created_at, language),
             };
-            // Decide which path to take BEFORE the setMessages updater
-            // (the updater must stay pure — mutating outer vars from
-            // inside it breaks React strict mode / concurrent renders).
-            const list = messages[activeChat] || [];
-            const ownIdx = shapedMsg.clientId
-              ? list.findIndex(x => x.clientId === shapedMsg.clientId && x.pending)
-              : -1;
-            const isDuplicate = ownIdx === -1 && list.some(x => x.id === shapedMsg.id);
-            const mergedOwn = ownIdx !== -1;
+            // Track this message_id so the message_attachments realtime
+            // handler can recognize attachments belonging to this chat.
+            // Realtime filter can't join across tables, so we cache
+            // known ids client-side and filter there.
+            chatMessageIdsRef.current.add(m.id);
+            // Decide which path to take INSIDE the setMessages updater
+            // so the lookup runs against the latest queued state, not a
+            // stale closure copy. The closure `messages` is captured at
+            // effect-setup time and doesn't refresh between sends, so
+            // reading it here would miss the optimistic row and append
+            // the realtime echo as a duplicate.
+            let mergedOwn = false;
             setMessages(prev => {
               const cur = prev[activeChat] || [];
-              if (mergedOwn) {
+              const ownIdx = shapedMsg.clientId
+                ? cur.findIndex(x => x.clientId === shapedMsg.clientId && x.pending)
+                : -1;
+              if (ownIdx !== -1) {
+                mergedOwn = true;
                 const next = cur.slice();
                 next[ownIdx] = {
                   ...next[ownIdx],
@@ -349,7 +365,9 @@ function App() {
                 };
                 return { ...prev, [activeChat]: next };
               }
-              if (isDuplicate) return prev;
+              if (cur.some(x => x.id === shapedMsg.id)) {
+                return prev;
+              }
               return { ...prev, [activeChat]: [...cur, shapedMsg] };
             });
             if (mergedOwn) {
@@ -365,18 +383,20 @@ function App() {
                 return nextAtts;
               });
             }
-            // Fetch attachments for newly-arrived messages. The initial
-            // history load covers messages that already existed when the
-            // chat opened, but realtime INSERTs for messages sent after
-            // open need their attachments pulled on demand — otherwise
-            // the receiver sees a "blank" message with no image/file.
-            // Skip when the sender's own optimistic path already
-            // remapped temp attachments onto this id.
+            // Fetch attachments for newly-arrived messages. Realtime
+            // also subscribes to message_attachments INSERTs (below),
+            // so this fallback is only needed if the attachment row
+            // arrives before the messages subscription is wired.
             (async () => {
               if (mergedOwn) return;
               const { data: newAtts } = await loadAttachments([shapedMsg.id]);
               if (!cancelled && newAtts && newAtts.length) {
-                setAttachments(prev => ({ ...prev, [shapedMsg.id]: newAtts }));
+                setAttachments(prev => {
+                  // Don't overwrite temp atts the sender's optimistic
+                  // path put in place after the realtime echo merged.
+                  if (prev[shapedMsg.id] && prev[shapedMsg.id].length) return prev;
+                  return { ...prev, [shapedMsg.id]: newAtts };
+                });
               }
             })();
             if (!isSavedChat) {
@@ -401,6 +421,21 @@ function App() {
                   : x
                 ),
               };
+            });
+          }
+        )
+        .on('postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'message_attachments' },
+          (payload) => {
+            // Supabase realtime can't filter attachments by chat_id
+            // directly (no join across tables). Drop events for
+            // attachments that don't belong to a message in this chat.
+            const att = payload.new;
+            if (!chatMessageIdsRef.current.has(att.message_id)) return;
+            setAttachments(prev => {
+              const cur = prev[att.message_id] || [];
+              if (cur.some(x => x.id === att.id)) return prev;
+              return { ...prev, [att.message_id]: [...cur, att] };
             });
           }
         )
@@ -586,6 +621,20 @@ function App() {
     // Clear reply context now that the message landed.
     setReplyTo(null);
 
+    // Remap temp attachments (keyed by clientId) onto the canonical
+    // real.id FIRST, so the message keeps showing its image/file during
+    // the brief window before the DB insert of attachment rows completes.
+    // Realtime echo may have already done this remap; the second remap
+    // is a no-op because `attachments[clientId]` is already gone.
+    setAttachments(prevAtts => {
+      const tmp = prevAtts[clientId];
+      if (!tmp) return prevAtts;
+      const nextAtts = { ...prevAtts };
+      delete nextAtts[clientId];
+      nextAtts[real.id] = tmp;
+      return nextAtts;
+    });
+
     // swap optimistic row for the real one (keep any pending attachments)
     setMessages(prev => ({
       ...prev,
@@ -613,18 +662,21 @@ function App() {
           .select().single();
         if (!attErr && newAtt) insertedAtts.push(newAtt);
       }
-      // Replace any temp attachments (keyed by clientId) with the real
-      // DB rows so the message shows the canonical attachment records.
-      // Realtime echo may have already remapped clientId → real.id; if
-      // so, the newAtt rows would duplicate. We overwite that slot
-      // entirely with the freshly-inserted rows.
+      // Replace temp attachments with the canonical DB rows so the
+      // message shows real attachment ids. If realtime echo already
+      // remapped, this overwrites that slot — same URLs, fresh DB rows.
       if (insertedAtts.length) {
         setAttachments(prev => {
           const next = { ...prev };
-          delete next[clientId];
           next[real.id] = insertedAtts;
           return next;
         });
+      } else if (opts.attachments.length) {
+        // DB insert failed entirely. Leave the temp-att remap in place
+        // so the user can still see their image. Realtime echo will
+        // eventually arrive and replace these with real rows when the
+        // server-side state settles.
+        console.warn('attachment insert failed; temp atts preserved');
       }
     }
 
