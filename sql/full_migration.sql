@@ -172,7 +172,9 @@ create table if not exists public.message_attachments (
   id uuid primary key default gen_random_uuid(),
   message_id uuid not null references public.messages(id) on delete cascade,
   kind text not null check (kind in ('image','video','audio','document','voice','link','note')),
-  url text,
+  url text,                     -- legacy public URL field
+  storage_path text,            -- bucket-relative path; client re-signs on display
+                                -- so attachments keep working regardless of bucket privacy
   file_name text,
   mime_type text,
   size_bytes bigint,
@@ -182,6 +184,16 @@ create table if not exists public.message_attachments (
 
 create index if not exists idx_attachments_message
   on public.message_attachments(message_id);
+
+-- Backfill storage_path for legacy rows whose url points at the
+-- `attachments` bucket. Extract the path after `attachments/`.
+update public.message_attachments
+   set storage_path = split_part(
+         split_part(url, '/attachments/', 2),
+         '?', 1)
+ where storage_path is null
+   and url is not null
+   and url like '%/attachments/%';
 
 alter table public.message_attachments enable row level security;
 

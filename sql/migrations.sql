@@ -11,7 +11,10 @@ create table if not exists public.message_attachments (
   id uuid primary key default gen_random_uuid(),
   message_id uuid not null references public.messages(id) on delete cascade,
   kind text not null check (kind in ('image','video','audio','document','voice','link','note')),
-  url text,                     -- public/supabase url for files
+  url text,                     -- public/supabase url for files (legacy rows)
+  storage_path text,            -- bucket-relative path; client re-signs on display
+                                -- so attachments keep working regardless of whether
+                                -- the bucket is public or private.
   file_name text,
   mime_type text,
   size_bytes bigint,
@@ -20,6 +23,20 @@ create table if not exists public.message_attachments (
 );
 create index if not exists idx_attachments_message
   on public.message_attachments(message_id);
+
+-- Backfill storage_path for legacy rows whose url points at the
+-- `attachments` bucket. The url format is:
+--   https://<host>/storage/v1/object/public/attachments/<path>
+-- or
+--   https://<host>/storage/v1/object/sign/attachments/<path>?...
+-- Extract the part after `attachments/` and stop at `?` if present.
+update public.message_attachments
+   set storage_path = split_part(
+         split_part(url, '/attachments/', 2),
+         '?', 1)
+ where storage_path is null
+   and url is not null
+   and url like '%/attachments/%';
 
 -- 2. saved_messages ----------------------------------------
 -- Telegram-style "Saved Messages" — private notes per user.

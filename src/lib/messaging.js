@@ -53,16 +53,23 @@ export async function loadAttachments(messageIds) {
     .from('message_attachments')
     .select('*')
     .in('message_id', messageIds);
-  return error ? err(error) : ok(data || []);
+  if (error) return err(error);
+  // Re-sign each row's storage_path so the URL works regardless of
+  // whether the bucket is public. Rows without storage_path keep
+  // their legacy url.
+  const rows = data || [];
+  const resolved = await Promise.all(rows.map(resolveAttachmentUrl));
+  return ok(resolved);
 }
 
-export async function addAttachment({ messageId, kind, url, fileName, mimeType, sizeBytes, meta = {} }) {
+export async function addAttachment({ messageId, kind, url, fileName, mimeType, sizeBytes, storagePath = null, meta = {} }) {
   const { data, error } = await supabase
     .from('message_attachments')
     .insert({
       message_id: messageId,
       kind,
       url,
+      storage_path: storagePath,
       file_name: fileName,
       mime_type: mimeType,
       size_bytes: sizeBytes,
@@ -92,8 +99,33 @@ export async function uploadAttachment(file, userId) {
     .from('attachments')
     .upload(path, file, { upsert: false });
   if (upErr) return err(upErr);
-  const { data: pub } = supabase.storage.from('attachments').getPublicUrl(path);
-  return ok({ url: pub.publicUrl, path });
+  // Issue a transient signed URL so the optimistic UI can render the
+  // image immediately after upload. The persisted reference is the
+  // storage `path`; on every load we re-sign the path so the URL
+  // keeps working even if the bucket is private or its policy changes.
+  const { data: signed, error: signErr } = await supabase.storage
+    .from('attachments')
+    .createSignedUrl(path, 60 * 60); // 1h — long enough for the optimistic render
+  const url = signed?.signedUrl || '';
+  if (signErr) return err(signErr);
+  return ok({ url, path });
+}
+
+// Resolve a stored attachment row to a working URL. Prefers a fresh
+// signed URL from `storage_path` (works regardless of bucket privacy);
+// falls back to the legacy `url` field for rows created before the
+// migration.
+export async function resolveAttachmentUrl(att) {
+  if (!att) return att;
+  if (att.storage_path) {
+    const { data, error } = await supabase.storage
+      .from('attachments')
+      .createSignedUrl(att.storage_path, 60 * 60 * 24 * 7); // 7 days
+    if (!error && data?.signedUrl) {
+      return { ...att, url: data.signedUrl };
+    }
+  }
+  return att;
 }
 
 export function detectKind(file) {

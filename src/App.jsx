@@ -9,6 +9,7 @@ import { supabase } from './supabaseClient';
 import {
   getOrCreateChat, loadMessages, sendMessage as sendMessageDb,
   loadAttachments, uploadAttachment, detectKind,
+  resolveAttachmentUrl,
   blockUser, unblockUser, muteChat, clearChat, deleteMessageForEveryone,
 } from './lib/messaging';
 import Login from './Login';
@@ -320,12 +321,15 @@ function App() {
       // `message_attachments` rows in two separate awaits. If the user
       // refreshes in that small gap, history load returns the message
       // but the attachment row is missing, so the image appears gone
-      // until the next refresh. Detect that case (textless messages
-      // with no attachments) and re-query once after a short delay.
+      // until the next refresh. Detect that case (any message with
+      // no attachments loaded) and re-query once after a short delay.
+      // The previous version only retried for textless messages, so a
+      // message that had BOTH text and an attachment could land in
+      // this gap and stay "empty" until the next refresh.
       const needsRetry = ids.some(id => {
         const msg = shaped.find(s => s.id === id);
         const hasAtt = atts && atts.some(a => a.message_id === id);
-        return msg && !msg.text && !hasAtt;
+        return msg && !hasAtt;
       });
       if (!cancelled && needsRetry) {
         setTimeout(async () => {
@@ -465,11 +469,19 @@ function App() {
             // attachments that don't belong to a message in this chat.
             const att = payload.new;
             if (!chatMessageIdsRef.current.has(att.message_id)) return;
-            setAttachments(prev => {
-              const cur = prev[att.message_id] || [];
-              if (cur.some(x => x.id === att.id)) return prev;
-              return { ...prev, [att.message_id]: [...cur, att] };
-            });
+            // The payload's `url` column is whatever the sender's
+            // send flow wrote into the row — currently a short-lived
+            // 1h signed URL. Re-sign against `storage_path` (if any)
+            // so the attachment keeps rendering past that window.
+            (async () => {
+              const fresh = await resolveAttachmentUrl(att);
+              if (cancelled) return;
+              setAttachments(prev => {
+                const cur = prev[fresh.message_id] || [];
+                if (cur.some(x => x.id === fresh.id)) return prev;
+                return { ...prev, [fresh.message_id]: [...cur, fresh] };
+              });
+            })();
           }
         )
         .subscribe();
@@ -574,7 +586,7 @@ function App() {
   const fetchClearedAtRef = useRef(fetchClearedAt);
   useEffect(() => { fetchClearedAtRef.current = fetchClearedAt; }, [fetchClearedAt]);
 
-  const sendOne = useCallback(async (text, opts = {}) => {
+const sendOne = useCallback(async (text, opts = {}) => {
     if (!session) return;
     let chatId = chatIdMap[activeChat];
     if (!chatId && activeChat) {
@@ -610,13 +622,16 @@ function App() {
     }));
     // Surface attachments on the optimistic row immediately (keyed by
     // clientId) so a freshly selected image renders without waiting
-    // for the realtime echo to swap ids.
+    // for the realtime echo to swap ids. We persist `storage_path`
+    // (not the transient signed url) on the row so we can re-sign on
+    // every load.
     if (opts.attachments && opts.attachments.length) {
       const tempAtts = opts.attachments.map((a, i) => ({
         id: `tmp-${clientId}-${i}`,
         message_id: clientId,
         kind: a.kind,
         url: a.url,
+        storage_path: a.storagePath || null,
         file_name: a.fileName,
         mime_type: a.mimeType,
         size_bytes: a.sizeBytes,
@@ -657,8 +672,6 @@ function App() {
     // Remap temp attachments (keyed by clientId) onto the canonical
     // real.id FIRST, so the message keeps showing its image/file during
     // the brief window before the DB insert of attachment rows completes.
-    // Realtime echo may have already done this remap; the second remap
-    // is a no-op because `attachments[clientId]` is already gone.
     setAttachments(prevAtts => {
       const tmp = prevAtts[clientId];
       if (!tmp) return prevAtts;
@@ -688,28 +701,25 @@ function App() {
             message_id: real.id,
             kind: att.kind,
             url: att.url,
+            storage_path: att.storagePath || null,
             file_name: att.fileName,
             mime_type: att.mimeType,
             size_bytes: att.sizeBytes,
           })
           .select().single();
-        if (!attErr && newAtt) insertedAtts.push(newAtt);
+        if (!attErr && newAtt) {
+          insertedAtts.push(newAtt);
+        } else if (attErr) {
+          console.error('attachment insert failed:', attErr, 'kind was:', att.kind);
+        }
       }
       // Replace temp attachments with the canonical DB rows so the
-      // message shows real attachment ids. If realtime echo already
-      // remapped, this overwrites that slot — same URLs, fresh DB rows.
+      // message shows real attachment ids.
       if (insertedAtts.length) {
-        setAttachments(prev => {
-          const next = { ...prev };
-          next[real.id] = insertedAtts;
-          return next;
-        });
-      } else if (opts.attachments.length) {
-        // DB insert failed entirely. Leave the temp-att remap in place
-        // so the user can still see their image. Realtime echo will
-        // eventually arrive and replace these with real rows when the
-        // server-side state settles.
+        setAttachments(prev => ({ ...prev, [real.id]: insertedAtts }));
+      } else {
         console.warn('attachment insert failed; temp atts preserved');
+        showToast(t('errorUpload'), 'error');
       }
     }
 
@@ -763,13 +773,13 @@ function App() {
       attachments: [{
         kind: detectKind(file),
         url: up.url,
+        storagePath: up.path,
         fileName: file.name,
         mimeType: file.type,
         sizeBytes: file.size,
       }],
     });
   };
-
   // ============================================
   // CHAT MENU actions (block / mute / clear / search)
   // ============================================
