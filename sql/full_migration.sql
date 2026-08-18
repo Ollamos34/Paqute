@@ -378,35 +378,45 @@ create policy "clears_write" on public.chat_clears
 -- ===========================================================
 -- 9. GET_OR_CREATE_CHAT RPC
 -- ===========================================================
+-- Parameter names MUST match the JS client's supabase.rpc() call:
+--   supabase.rpc('get_or_create_chat', { user_a, user_b })
+-- PostgREST matches RPCs by parameter name, so renaming to
+-- p_user_a/p_user_b would break the client with PGRST202.
 
-create or replace function public.get_or_create_chat(p_user_a uuid, p_user_b uuid)
+create or replace function public.get_or_create_chat(user_a uuid, user_b uuid)
 returns uuid
 language plpgsql
 security definer
 as $$
 declare
+  -- IMPORTANT: copy parameter values into locals. The chats table
+  -- has columns named user_a and user_b, so referring to the bare
+  -- parameter names inside WHERE / VALUES clauses triggers
+  -- PL/pgSQL error 42702 ("column reference is ambiguous").
+  p_a uuid := user_a;
+  p_b uuid := user_b;
   found_id uuid;
   lo uuid;
   hi uuid;
 begin
   -- self-chat (Saved Messages)
-  if p_user_a = p_user_b then
+  if p_a = p_b then
     select id into found_id from public.chats
-      where user_a = p_user_a and user_b = p_user_b
+      where user_a = p_a and user_b = p_b
       limit 1;
     if found_id is null then
       insert into public.chats (user_a, user_b)
-        values (p_user_a, p_user_b)
+        values (p_a, p_b)
         returning id into found_id;
     end if;
     return found_id;
   end if;
 
   -- pair chat: order (lo, hi)
-  if p_user_a < p_user_b then
-    lo := p_user_a; hi := p_user_b;
+  if p_a < p_b then
+    lo := p_a; hi := p_b;
   else
-    lo := p_user_b; hi := p_user_a;
+    lo := p_b; hi := p_a;
   end if;
 
   select id into found_id from public.chats
@@ -483,6 +493,29 @@ create policy "attachments_storage_write" on storage.objects
 -- mirrors `text` so both read paths work.
 alter table public.messages
   add column if not exists content text generated always as (text) stored;
+
+-- ===========================================================
+-- 12. REALTIME PUBLICATION
+-- ===========================================================
+-- New tables are NOT in the supabase_realtime publication by default.
+-- Without this step the JS Realtime channel subscribes to nothing
+-- and the browser cycles reconnect attempts in the console.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and tablename = 'messages'
+  ) then
+    alter publication supabase_realtime add table public.messages;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and tablename = 'message_attachments'
+  ) then
+    alter publication supabase_realtime add table public.message_attachments;
+  end if;
+end$$;
 
 -- ===========================================================
 -- DONE

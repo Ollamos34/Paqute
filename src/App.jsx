@@ -52,6 +52,11 @@ function App() {
   // for attachments of messages in OTHER chats (realtime can't filter
   // attachments by chat_id because that join isn't supported).
   const chatMessageIdsRef = useRef(new Set());
+  // Attachments that arrived via realtime BEFORE their message row
+  // did. Realtime has no global ordering across tables, so we hold
+  // these and flush them when the messages handler sees the id.
+  // Keyed by message_id (the foreign key on the attachment row).
+  const pendingAttsRef = useRef(new Map());
 
   const [inputValue, setInputValue] = useState('');
   const [theme, setTheme] = useState(() => {
@@ -299,6 +304,8 @@ function App() {
       // Seed chatMessageIdsRef with history ids so the attachments
       // realtime handler accepts rows belonging to this chat.
       chatMessageIdsRef.current = new Set(shaped.map(s => s.id));
+      // Drop any orphan attachments buffered for the previous chat.
+      pendingAttsRef.current = new Map();
       setMessages(prev => {
         const optimistic = (prev[activeChat] || []).filter(
           m => m.pending && m.clientId && !shaped.some(s => s.clientId === m.clientId)
@@ -379,6 +386,21 @@ function App() {
             // Realtime filter can't join across tables, so we cache
             // known ids client-side and filter there.
             chatMessageIdsRef.current.add(m.id);
+            // The message_attachments realtime handler may have
+            // dropped attachments for this message_id (arrived BEFORE
+            // the messages row did). Flush any pending ones now.
+            const pending = pendingAttsRef.current.get(m.id);
+            if (pending && pending.length) {
+              pendingAttsRef.current.delete(m.id);
+              setAttachments(prev => {
+                const cur = prev[m.id] || [];
+                const merged = [...cur];
+                for (const att of pending) {
+                  if (!merged.some(x => x.id === att.id)) merged.push(att);
+                }
+                return { ...prev, [m.id]: merged };
+              });
+            }
             // Decide which path to take INSIDE the setMessages updater
             // so the lookup runs against the latest queued state, not a
             // stale closure copy. The closure `messages` is captured at
@@ -468,11 +490,19 @@ function App() {
             // directly (no join across tables). Drop events for
             // attachments that don't belong to a message in this chat.
             const att = payload.new;
-            if (!chatMessageIdsRef.current.has(att.message_id)) return;
+            // If we don't know about this message yet (the messages
+            // realtime event hasn't fired), buffer the attachment so
+            // the messages handler can flush it once the id arrives.
+            if (!chatMessageIdsRef.current.has(att.message_id)) {
+              const queue = pendingAttsRef.current.get(att.message_id) || [];
+              queue.push(att);
+              pendingAttsRef.current.set(att.message_id, queue);
+              return;
+            }
             // The payload's `url` column is whatever the sender's
-            // send flow wrote into the row — currently a short-lived
-            // 1h signed URL. Re-sign against `storage_path` (if any)
-            // so the attachment keeps rendering past that window.
+            // send flow wrote into the row. Re-sign against
+            // `storage_path` so the attachment keeps rendering past
+            // whatever window the original URL was valid for.
             (async () => {
               const fresh = await resolveAttachmentUrl(att);
               if (cancelled) return;
@@ -695,12 +725,16 @@ const sendOne = useCallback(async (text, opts = {}) => {
     if (opts.attachments && opts.attachments.length) {
       const insertedAtts = [];
       for (const att of opts.attachments) {
+        // Don't persist the short-lived signed URL in the DB — only
+        // the storage_path. The DB `url` field is legacy; new rows
+        // store empty so a later refresh can't resurrect an expired
+        // 1h signed URL. Every load re-signs via resolveAttachmentUrl.
         const { data: newAtt, error: attErr } = await supabase
           .from('message_attachments')
           .insert({
             message_id: real.id,
             kind: att.kind,
-            url: att.url,
+            url: '',
             storage_path: att.storagePath || null,
             file_name: att.fileName,
             mime_type: att.mimeType,
@@ -708,13 +742,17 @@ const sendOne = useCallback(async (text, opts = {}) => {
           })
           .select().single();
         if (!attErr && newAtt) {
-          insertedAtts.push(newAtt);
+          // Re-sign immediately so the inserted row has a working URL.
+          // Without this the row has `url: ''` and renders as a broken
+          // image until something else triggers resolveAttachmentUrl.
+          const signed = await resolveAttachmentUrl(newAtt);
+          insertedAtts.push(signed);
         } else if (attErr) {
           console.error('attachment insert failed:', attErr, 'kind was:', att.kind);
         }
       }
       // Replace temp attachments with the canonical DB rows so the
-      // message shows real attachment ids.
+      // message shows real attachment ids with fresh signed URLs.
       if (insertedAtts.length) {
         setAttachments(prev => ({ ...prev, [real.id]: insertedAtts }));
       } else {

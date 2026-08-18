@@ -55,11 +55,14 @@ export async function loadAttachments(messageIds) {
     .in('message_id', messageIds);
   if (error) return err(error);
   // Re-sign each row's storage_path so the URL works regardless of
-  // whether the bucket is public. Rows without storage_path keep
-  // their legacy url.
+  // whether the bucket is public. Rows without storage_path fall
+  // back to whatever's in `url` (legacy rows may still have a
+  // working public URL there).
   const rows = data || [];
   const resolved = await Promise.all(rows.map(resolveAttachmentUrl));
-  return ok(resolved);
+  // Drop rows that ended up with no URL at all — they'd render as
+  // a broken image. The caller treats these as "no attachment".
+  return ok(resolved.filter(r => r && r.url));
 }
 
 export async function addAttachment({ messageId, kind, url, fileName, mimeType, sizeBytes, storagePath = null, meta = {} }) {
@@ -114,7 +117,8 @@ export async function uploadAttachment(file, userId) {
 // Resolve a stored attachment row to a working URL. Prefers a fresh
 // signed URL from `storage_path` (works regardless of bucket privacy);
 // falls back to the legacy `url` field for rows created before the
-// migration.
+// migration. If the storage object itself is missing, returns the
+// att with an empty url so the caller can drop it.
 export async function resolveAttachmentUrl(att) {
   if (!att) return att;
   if (att.storage_path) {
@@ -124,7 +128,15 @@ export async function resolveAttachmentUrl(att) {
     if (!error && data?.signedUrl) {
       return { ...att, url: data.signedUrl };
     }
+    // Signing failed (object missing, perms changed, etc.). Log so
+    // the bug is visible in dev tools and fall through to the
+    // legacy url field — if that's also missing, the row is dropped
+    // by loadAttachments' filter.
+    if (error) console.warn('resolveAttachmentUrl: sign failed', error);
   }
+  // No storage_path OR signing failed — use the legacy url field,
+  // but only if it looks like it could still work (public URL or a
+  // fresh signed URL). Empty-string urls are dropped by the caller.
   return att;
 }
 
