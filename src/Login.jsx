@@ -340,36 +340,6 @@ function Login() {
               <span className="login-button-rule" aria-hidden />
             </button>
 
-            <p className="login-divider">
-              <span className="login-divider-rule" aria-hidden />
-              <span className="login-divider-text">{t('orContinueWith')}</span>
-              <span className="login-divider-rule" aria-hidden />
-            </p>
-
-            <div className="login-providers" role="group" aria-label="OAuth providers">
-              <button
-                type="button"
-                className="login-provider"
-                onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
-              >
-                Google
-              </button>
-              <button
-                type="button"
-                className="login-provider"
-                onClick={() => supabase.auth.signInWithOAuth({ provider: 'github' })}
-              >
-                GitHub
-              </button>
-              <button
-                type="button"
-                className="login-provider"
-                onClick={() => supabase.auth.signInWithOAuth({ provider: 'apple' })}
-              >
-                Apple
-              </button>
-            </div>
-
             <p className="login-terms">{t('termsNotice')}</p>
           </form>
 
