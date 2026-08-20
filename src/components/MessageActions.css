@@ -4,7 +4,8 @@
   right: 4px;
   width: 22px;
   height: 22px;
-  border-radius: 2px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
   background: transparent;
   color: var(--color-muted);
   display: flex;
@@ -14,6 +15,7 @@
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 .message:hover .message-actions-toggle,
 .message:focus-within .message-actions-toggle,
@@ -31,18 +33,20 @@
   padding: 4px;
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
-  border-radius: 2px;
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
   z-index: 50;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+  animation: message-menu-in 140ms ease-out;
 }
 .message-action {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
-  border-radius: 2px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
   font-size: 0.8125rem;
   color: var(--color-foreground);
   text-align: left;
@@ -52,3 +56,8 @@
 .message-action:hover { background: var(--color-surface-hover); }
 .message-action.danger { color: var(--color-destructive); }
 .message-action.danger:hover { background: rgba(196, 90, 63, 0.12); }
+
+@keyframes message-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}

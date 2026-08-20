@@ -99,6 +99,7 @@ function App() {
   });
   const messagesEndRef = useRef(null);
   const headerMenuRef = useRef(null);
+  const messageActionRefs = useRef({});
 
   const t = (key) => getTranslation(language, key);
 
@@ -1279,6 +1280,12 @@ const sendOne = useCallback(async (text, opts = {}) => {
                     key={msg.id}
                     className={`message ${msg.sender} ${msg.pending ? 'pending' : ''} ${msg.failed ? 'failed' : ''} ${canReply ? 'can-reply' : ''}`}
                     onDoubleClick={() => canReply && setReplyTo(msg)}
+                    onContextMenu={(e) => {
+                      if (!canReply) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      messageActionRefs.current[msg.id]?.current?.open();
+                    }}
                     onTouchStart={onTouchStart}
                     title={canReply ? t('replyHint') || 'Double-click to reply' : undefined}
                   >
@@ -1313,6 +1320,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
                     </div>
                     {!msg.pending && !msg.deleted && (
                       <MessageActions
+                        ref={messageActionRefs.current[msg.id] ||= { current: null }}
                         msg={msg}
                         isSavedChat={isSavedChat}
                         onCopy={() => { navigator.clipboard.writeText(msg.text || ''); showToast(t('copied'), 'info'); }}

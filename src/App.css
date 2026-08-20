@@ -10,6 +10,22 @@
     var(--color-background);
 }
 
+/* Softer rounded interaction language across the chat surface. */
+.sidebar { border-radius: 0 var(--radius-lg) var(--radius-lg) 0; }
+.profile-chip, .header-menu, .icon-btn, .search-input, .chat-search-bar input,
+.chat-input, .send-btn, .chat-empty-mark, .empty-state, .tab-badge, .unread-badge,
+.attachment, .attachment-image img, .attachment-video, .attachment-audio,
+.attachment-file, .toast, .reply-preview { border-radius: var(--radius-md); }
+.chat-item { border-radius: var(--radius-sm); margin: 2px 8px; border-bottom: 0; }
+.chat-item:first-child { border-top: 0; }
+.chat-item.active::before { left: 8px; top: 8px; bottom: 8px; width: 3px; border-radius: var(--radius-full); }
+.chat-avatar, .profile-chip-avatar { border-radius: var(--radius-full); }
+.message.me .message-bubble, .message.them .message-bubble { clip-path: none; border-radius: var(--radius-lg); }
+.message.me .message-bubble { border-bottom-right-radius: var(--radius-xs); }
+.message.them .message-bubble { border-bottom-left-radius: var(--radius-xs); }
+.chat-input { min-height: 44px; }
+.send-btn { border-radius: var(--radius-full); }
+
 .light-theme .app {
   background:
     repeating-linear-gradient(0deg, transparent 0 23px, rgba(0,0,0,0.012) 23px 24px),

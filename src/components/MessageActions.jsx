@@ -1,10 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
-import { Copy, Reply, Forward, Bookmark, Trash2 } from 'lucide-react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { Copy, Reply, Forward, Bookmark, Trash2, MoreHorizontal } from 'lucide-react';
 import './MessageActions.css';
 
-function MessageActions({ msg, isSavedChat, onCopy, onReply, onForward, onSaveToSaved, onDeleteForEveryone, t }) {
+const MessageActions = forwardRef(function MessageActions({ msg, isSavedChat, onCopy, onReply, onForward, onSaveToSaved, onDeleteForEveryone, t }, forwardedRef) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+
+  useImperativeHandle(forwardedRef, () => ({
+    open: () => setOpen(true),
+    close: () => setOpen(false),
+  }), []);
 
   useEffect(() => {
     if (!open) return;
@@ -23,6 +28,7 @@ function MessageActions({ msg, isSavedChat, onCopy, onReply, onForward, onSaveTo
   if (!open) {
     return (
       <button
+        type="button"
         className="message-actions-toggle"
         onClick={(e) => { e.stopPropagation(); setOpen(true); }}
         aria-label={t('more')}
@@ -30,7 +36,7 @@ function MessageActions({ msg, isSavedChat, onCopy, onReply, onForward, onSaveTo
         aria-haspopup="menu"
         title={t('more')}
       >
-        ⋯
+        <MoreHorizontal size={16} aria-hidden="true" />
       </button>
     );
   }
@@ -63,6 +69,6 @@ function MessageActions({ msg, isSavedChat, onCopy, onReply, onForward, onSaveTo
       )}
     </div>
   );
-}
+});
 
 export default MessageActions;
