@@ -46,6 +46,7 @@ alter table public.messages enable row level security;
 
 drop policy if exists "messages_read" on public.messages;
 drop policy if exists "messages_write" on public.messages;
+drop policy if exists "messages_update" on public.messages;
 
 -- Users can read messages from chats they're in
 create policy "messages_read" on public.messages
@@ -67,6 +68,10 @@ create policy "messages_write" on public.messages
         and (c.user_a = auth.uid() or c.user_b = auth.uid())
     )
   );
+
+create policy "messages_update" on public.messages
+  for update using (sender_id = auth.uid())
+  with check (sender_id = auth.uid());
 
 -- 3. get_or_create_chat RPC ---------------------------------
 create or replace function public.get_or_create_chat(user_a uuid, user_b uuid)

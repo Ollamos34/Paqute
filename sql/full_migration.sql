@@ -47,6 +47,7 @@ alter table public.messages enable row level security;
 
 drop policy if exists "messages_read" on public.messages;
 drop policy if exists "messages_write" on public.messages;
+drop policy if exists "messages_update" on public.messages;
 drop policy if exists "messages_delete" on public.messages;
 
 create policy "messages_read" on public.messages
@@ -67,6 +68,10 @@ create policy "messages_write" on public.messages
         and (c.user_a = auth.uid() or c.user_b = auth.uid())
     )
   );
+
+create policy "messages_update" on public.messages
+  for update using (sender_id = auth.uid())
+  with check (sender_id = auth.uid());
 
 -- ===========================================================
 -- 2. PROFILES
@@ -364,6 +369,19 @@ create table if not exists public.chat_clears (
   cleared_at timestamptz not null default now(),
   primary key (user_id, chat_id)
 );
+
+create table if not exists public.hidden_chats (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  profile_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, profile_id)
+);
+
+alter table public.hidden_chats enable row level security;
+drop policy if exists "hidden_chats_read" on public.hidden_chats;
+drop policy if exists "hidden_chats_write" on public.hidden_chats;
+create policy "hidden_chats_read" on public.hidden_chats for select using (user_id = auth.uid());
+create policy "hidden_chats_write" on public.hidden_chats for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 alter table public.chat_clears enable row level security;
 

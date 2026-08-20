@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { Copy, Reply, Forward, Bookmark, Trash2, MoreHorizontal } from 'lucide-react';
+import { Copy, Reply, Forward, Bookmark, Trash2, MoreHorizontal, RotateCcw } from 'lucide-react';
 import './MessageActions.css';
 
-const MessageActions = forwardRef(function MessageActions({ msg, isSavedChat, onCopy, onReply, onForward, onSaveToSaved, onDeleteForEveryone, t }, forwardedRef) {
+const MessageActions = forwardRef(function MessageActions({ msg, isSavedChat, isFailed, onCopy, onReply, onRetry, onForward, onSaveToSaved, onDeleteForEveryone, t }, forwardedRef) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -48,10 +48,15 @@ const MessageActions = forwardRef(function MessageActions({ msg, isSavedChat, on
       ref={ref}
       onClick={(e) => e.stopPropagation()}
     >
+      {isFailed && (
+        <button className="message-action" role="menuitem" onClick={() => { onRetry(); setOpen(false); }} title={t('retry') || 'Retry'}>
+          <RotateCcw size={14} /> <span>{t('retry') || 'Retry'}</span>
+        </button>
+      )}
       <button className="message-action" role="menuitem" onClick={() => { onCopy(); setOpen(false); }} title={t('copy')}>
         <Copy size={14} /> <span>{t('copy')}</span>
       </button>
-      {!isSavedChat && (
+      {!isSavedChat && !isFailed && (
         <button className="message-action" role="menuitem" onClick={() => { onReply(); setOpen(false); }} title={t('reply')}>
           <Reply size={14} /> <span>{t('reply')}</span>
         </button>
@@ -62,7 +67,7 @@ const MessageActions = forwardRef(function MessageActions({ msg, isSavedChat, on
       <button className="message-action" role="menuitem" onClick={() => { onSaveToSaved(); setOpen(false); }} title={t('saveToSaved')}>
         <Bookmark size={14} /> <span>{t('saveToSaved')}</span>
       </button>
-      {msg.sender === 'me' && (
+      {msg.sender === 'me' && !isFailed && (
         <button className="message-action danger" role="menuitem" onClick={() => { onDeleteForEveryone(); setOpen(false); }} title={t('deleteForEveryone')}>
           <Trash2 size={14} /> <span>{t('deleteForEveryone')}</span>
         </button>

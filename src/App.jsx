@@ -41,6 +41,9 @@ function App() {
   const [hiddenIds, setHiddenIds] = useState([]); // profile ids of chats I deleted
   const [mutedChats, setMutedChats] = useState([]); // chatIds I have muted
   const [sending, setSending] = useState(false);
+  const [chatLoadError, setChatLoadError] = useState(null);
+  const [chatReloadKey, setChatReloadKey] = useState(0);
+  const toastTimerRef = useRef(null);
   const [replyTo, setReplyTo] = useState(null);
   const [previewAtt, setPreviewAtt] = useState(null); // attachment shown in lightbox
   const [toast, setToast] = useState(null); // { kind:'info'|'error', text }
@@ -127,7 +130,7 @@ function App() {
     const list = contacts.filter(chat => {
       if (hiddenIds.includes(chat.id)) return false;
       const matchesSearch = searchQuery === '' ||
-        chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (chat.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (chat.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase());
 
       if (showFavorites) {
@@ -161,7 +164,12 @@ function App() {
         setContacts([]);
         setOnlineIds([]);
         setMessages({});
+        setAttachments({});
         setChatIdMap({});
+        setBlockedIds([]);
+        setHiddenIds([]);
+        setMutedChats([]);
+        setReplyTo(null);
         setActiveChat(null);
         if (messageChannelRef.current) {
           supabase.removeChannel(messageChannelRef.current);
@@ -186,7 +194,7 @@ function App() {
         if (error) { console.error(error); return; }
         const shaped = (data || []).map(p => ({
           id: p.id,
-          name: p.username,
+          name: p.username || `user-${String(p.id).slice(0, 8)}`,
           avatar: p.avatar_url || null,
           lastMessage: '',
           timestamp: '',
@@ -264,6 +272,7 @@ function App() {
   useEffect(() => {
     if (!session || !activeChat) return;
 
+    setChatLoadError(null);
     let cancelled = false;
     let localChannel = null;
 
@@ -273,6 +282,7 @@ function App() {
       const { data: chatId, error } = await getOrCreateChat(session.user.id, otherId);
       if (error) {
         console.error('get_or_create_chat failed:', error);
+        setChatLoadError(t('errorChatInit'));
         showToast(t('errorChatInit'), 'error');
         return;
       }
@@ -282,7 +292,11 @@ function App() {
 
       // 2. load history + attachments in parallel
       const { data: history, error: histErr } = await loadMessages(chatId);
-      if (histErr) console.error('loadMessages failed:', histErr);
+      if (histErr) {
+        console.error('loadMessages failed:', histErr);
+        setChatLoadError(t('errorChatInit'));
+        return;
+      }
       if (cancelled) return;
 
       const clearedAt = await fetchClearedAtRef.current(chatId);
@@ -536,7 +550,7 @@ function App() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, activeChat, isSavedChat, language]);
+  }, [session, activeChat, isSavedChat, language, chatReloadKey]);
 
   // ============================================
   // Existing effects (theme, prefs, scroll)
@@ -597,10 +611,11 @@ function App() {
   // ============================================
   // SEND MESSAGE — optimistic insert + real DB write
   // ============================================
-  const showToast = (text, kind = 'info') => {
+  const showToast = useCallback((text, kind = 'info') => {
     setToast({ text, kind });
-    setTimeout(() => setToast(null), 3000);
-  };
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+  }, []);
 
   const fetchClearedAt = useCallback(async (chatId) => {
     if (!session || !chatId) return null;
@@ -618,17 +633,20 @@ function App() {
   useEffect(() => { fetchClearedAtRef.current = fetchClearedAt; }, [fetchClearedAt]);
 
 const sendOne = useCallback(async (text, opts = {}) => {
-    if (!session) return;
-    let chatId = chatIdMap[activeChat];
-    if (!chatId && activeChat) {
-      const otherId = isSavedChat ? session.user.id : activeChat;
+    if (!session) return null;
+    const targetChat = opts.chatKey || activeChat;
+    const targetIsSavedChat = targetChat === SAVED_MESSAGES_ID;
+    const targetReply = opts.replyTo !== undefined ? opts.replyTo : replyTo;
+    let chatId = chatIdMap[targetChat];
+    if (!chatId && targetChat) {
+      const otherId = targetIsSavedChat ? session.user.id : targetChat;
       const { data, error } = await getOrCreateChat(session.user.id, otherId);
       if (error || !data) {
         showToast(t('errorSend'), 'error');
         return null;
       }
       chatId = data;
-      setChatIdMap(prev => ({ ...prev, [activeChat]: chatId }));
+      setChatIdMap(prev => ({ ...prev, [targetChat]: chatId }));
     }
     if (!chatId) return null;
 
@@ -640,8 +658,8 @@ const sendOne = useCallback(async (text, opts = {}) => {
       failed: false,
       text: text || '',
       deleted: false,
-      replyTo: replyTo?.id || null,
-      replyToText: replyTo?.text || null,
+      replyTo: targetReply?.id || null,
+      replyToText: targetReply?.text || null,
       sender: 'me',
       createdAt: new Date().toISOString(),
       timestamp: formatTs(new Date().toISOString(), language),
@@ -649,7 +667,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
     };
     setMessages(prev => ({
       ...prev,
-      [activeChat]: [...(prev[activeChat] || []), optimistic],
+      [targetChat]: [...(prev[targetChat] || []), optimistic],
     }));
     // Surface attachments on the optimistic row immediately (keyed by
     // clientId) so a freshly selected image renders without waiting
@@ -680,15 +698,15 @@ const sendOne = useCallback(async (text, opts = {}) => {
       chatId,
       senderId: session.user.id,
       content: text,
-      replyTo: replyTo?.id || null,
+      replyTo: targetReply?.id || null,
       clientId,
     });
 
-    if (error) {
-      console.error('sendMessage failed:', error);
+    if (error || !real) {
+      console.error('sendMessage failed:', error || new Error('Empty send response'));
       setMessages(prev => ({
         ...prev,
-        [activeChat]: (prev[activeChat] || []).map(m =>
+        [targetChat]: (prev[targetChat] || []).map(m =>
           m.id === clientId ? { ...m, failed: true, pending: false } : m
         ),
       }));
@@ -715,7 +733,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
     // swap optimistic row for the real one (keep any pending attachments)
     setMessages(prev => ({
       ...prev,
-      [activeChat]: (prev[activeChat] || []).map(m =>
+      [targetChat]: (prev[targetChat] || []).map(m =>
         m.id === clientId
           ? { ...m, id: real.id, pending: false, createdAt: real.created_at, timestamp: formatTs(real.created_at, language) }
           : m
@@ -762,22 +780,32 @@ const sendOne = useCallback(async (text, opts = {}) => {
       }
     }
 
-    if (!isSavedChat) {
+    if (!targetIsSavedChat) {
       setContacts(prev => prev.map(c =>
-        c.id === activeChat
+        c.id === targetChat
           ? { ...c, lastMessage: text || t('attachment'), timestamp: formatTs(new Date().toISOString(), language) }
           : c
       ));
     }
     return real;
-  }, [activeChat, chatIdMap, isSavedChat, language, replyTo, session, t]);
+  }, [activeChat, chatIdMap, language, replyTo, session, t]);
+
+  const retryMessage = useCallback(async (msg) => {
+    if (sending || !msg?.failed || !activeChat) return;
+    const retryAttachments = (attachments[msg.id] || []).map(att => ({ kind: att.kind, url: att.url, storagePath: att.storage_path || null, fileName: att.file_name, mimeType: att.mime_type, sizeBytes: att.size_bytes })).filter(att => att.url || att.storagePath);
+    setMessages(prev => ({ ...prev, [activeChat]: (prev[activeChat] || []).filter(item => item.id !== msg.id) }));
+    setAttachments(prev => { const next = { ...prev }; delete next[msg.id]; return next; });
+    setSending(true);
+    try { await sendOne(msg.text || '', { chatKey: activeChat, replyTo: msg.replyTo ? { id: msg.replyTo, text: msg.replyToText || '' } : null, attachments: retryAttachments }); }
+    finally { setSending(false); }
+  }, [activeChat, attachments, sendOne, sending]);
 
   const handleSendMessage = async () => {
     if (sending) return; // guard against double-send on rapid Enter
     if (!inputValue.trim() || !activeChat || !session) return;
 
     setSending(true);
-    const text = inputValue;
+    const text = inputValue.trim();
     setInputValue('');
     try {
       await sendOne(text);
@@ -797,18 +825,16 @@ const sendOne = useCallback(async (text, opts = {}) => {
   const handleFilePick = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !session) return;
+    if (!file || !session || !activeChat || isBlocked || sending) return;
     if (file.size > 25 * 1024 * 1024) {
       showToast(t('errorFileSize'), 'error');
       return;
     }
-    const { data: up, error: upErr } = await uploadAttachment(file, session.user.id);
-    if (upErr) {
-      console.error('upload failed:', upErr);
-      showToast(t('errorUpload'), 'error');
-      return;
-    }
-    await sendOne('', {
+    setSending(true);
+    try {
+      const { data: up, error: upErr } = await uploadAttachment(file, session.user.id);
+      if (upErr || !up) { showToast(t('errorUpload'), 'error'); return; }
+      await sendOne('', {
       attachments: [{
         kind: detectKind(file),
         url: up.url,
@@ -817,7 +843,9 @@ const sendOne = useCallback(async (text, opts = {}) => {
         mimeType: file.type,
         sizeBytes: file.size,
       }],
-    });
+      });
+    } catch (error) { console.error('attachment send failed:', error); showToast(t('errorUpload'), 'error'); }
+    finally { setSending(false); }
   };
   // ============================================
   // CHAT MENU actions (block / mute / clear / search)
@@ -844,12 +872,14 @@ const sendOne = useCallback(async (text, opts = {}) => {
   const handleToggleBlock = async () => {
     if (!activeChat || isSavedChat || !session) return;
     if (isBlocked) {
-      await unblockUser(session.user.id, activeChat);
+      const { error } = await unblockUser(session.user.id, activeChat);
+      if (error) { showToast(t('errorGeneric'), 'error'); return; }
       setBlockedIds(prev => prev.filter(id => id !== activeChat));
       showToast(t('unblocked'), 'info');
     } else {
-      await blockUser(session.user.id, activeChat);
-      setBlockedIds(prev => [...prev, activeChat]);
+      const { error } = await blockUser(session.user.id, activeChat);
+      if (error) { showToast(t('errorGeneric'), 'error'); return; }
+      setBlockedIds(prev => prev.includes(activeChat) ? prev : [...prev, activeChat]);
       showToast(t('blocked'), 'info');
     }
     setChatMenuOpen(false);
@@ -860,12 +890,14 @@ const sendOne = useCallback(async (text, opts = {}) => {
     const chatId = chatIdMap[activeChat];
     if (!chatId) return;
     if (isMuted) {
-      await supabase.from('chat_mutes').delete().eq('user_id', session.user.id).eq('chat_id', chatId);
+      const { error } = await supabase.from('chat_mutes').delete().eq('user_id', session.user.id).eq('chat_id', chatId);
+      if (error) { showToast(t('errorGeneric'), 'error'); return; }
       setMutedChats(prev => prev.filter(id => id !== chatId));
       showToast(t('unmuted'), 'info');
     } else {
-      await muteChat(session.user.id, chatId);
-      setMutedChats(prev => [...prev, chatId]);
+      const { error } = await muteChat(session.user.id, chatId);
+      if (error) { showToast(t('errorGeneric'), 'error'); return; }
+      setMutedChats(prev => prev.includes(chatId) ? prev : [...prev, chatId]);
       showToast(t('muted'), 'info');
     }
     setChatMenuOpen(false);
@@ -875,7 +907,9 @@ const sendOne = useCallback(async (text, opts = {}) => {
     if (!activeChat || isSavedChat || !session) return;
     if (!window.confirm(t('confirmClear'))) return;
     const chatId = chatIdMap[activeChat];
-    await clearChat(session.user.id, chatId);
+    if (!chatId) { showToast(t('errorChatInit'), 'error'); return; }
+    const { error: clearError } = await clearChat(session.user.id, chatId);
+    if (clearError) { showToast(t('errorGeneric'), 'error'); return; }
     // Only clear this chat's messages + attachments; don't wipe other chats' attachments.
     setMessages(prev => ({ ...prev, [activeChat]: [] }));
     const msgIds = (messages[activeChat] || []).map(m => m.id);
@@ -894,6 +928,8 @@ const sendOne = useCallback(async (text, opts = {}) => {
     if (!activeChat || isSavedChat || !session) return;
     if (!window.confirm(t('confirmDelete'))) return;
     const msgIds = (messages[activeChat] || []).map(m => m.id);
+    const { error: hideError } = await supabase.from('hidden_chats').upsert({ user_id: session.user.id, profile_id: activeChat });
+    if (hideError) { showToast(t('errorGeneric'), 'error'); return; }
     setMessages(prev => ({ ...prev, [activeChat]: [] }));
     if (msgIds.length) {
       setAttachments(prev => {
@@ -902,11 +938,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
         return next;
       });
     }
-    await supabase.from('hidden_chats').upsert({
-      user_id: session.user.id,
-      chat_id: activeChat,
-    });
-    setHiddenIds(prev => [...prev, activeChat]);
+    setHiddenIds(prev => prev.includes(activeChat) ? prev : [...prev, activeChat]);
     setFavorites(prev => prev.filter(id => id !== activeChat));
     showToast(t('chatDeleted'), 'info');
     setChatMenuOpen(false);
@@ -927,10 +959,16 @@ const sendOne = useCallback(async (text, opts = {}) => {
   useEffect(() => {
     if (!session) return;
     supabase
-      .from('hidden_chats')
+      .from('chat_mutes')
       .select('chat_id')
       .eq('user_id', session.user.id)
-      .then(({ data }) => setHiddenIds((data || []).map(r => r.chat_id)));
+      .then(({ data }) => setMutedChats((data || []).map(r => r.chat_id)));
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    supabase.from('hidden_chats').select('profile_id').eq('user_id', session.user.id)
+      .then(({ data }) => setHiddenIds((data || []).map(r => r.profile_id)));
   }, [session]);
 
   const toggleTheme = () => {
@@ -1260,10 +1298,18 @@ const sendOne = useCallback(async (text, opts = {}) => {
                 </div>
               )}
               <div className="messages-list">
-                {currentMessages.length === 0 && (
+                {chatLoadError && (
+                  <div className="empty-state">
+                    <p>{chatLoadError}</p>
+                    <button type="button" className="message-action" onClick={() => setChatReloadKey(value => value + 1)}>
+                      {t('retry') || 'Retry'}
+                    </button>
+                  </div>
+                )}
+                {!chatLoadError && currentMessages.length === 0 && (
                   <div className="empty-state">{t('noMessages')}</div>
                 )}
-                {currentMessages
+                {!chatLoadError && currentMessages
                   .filter(m => !chatSearchQuery || (m.text || '').toLowerCase().includes(chatSearchQuery.toLowerCase()))
                   .map(msg => {
                     // Double-click to reply works for any non-deleted message
@@ -1281,7 +1327,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
                     className={`message ${msg.sender} ${msg.pending ? 'pending' : ''} ${msg.failed ? 'failed' : ''} ${canReply ? 'can-reply' : ''}`}
                     onDoubleClick={() => canReply && setReplyTo(msg)}
                     onContextMenu={(e) => {
-                      if (!canReply) return;
+                      if (msg.pending || msg.deleted) return;
                       e.preventDefault();
                       e.stopPropagation();
                       messageActionRefs.current[msg.id]?.current?.open();
@@ -1292,7 +1338,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
                     {msg.replyTo && (
                       <div className="message-reply">
                         <Reply size={12} />
-                        <span>{msg.replyToText || t('message')}</span>
+                        <span>{msg.replyToText || currentMessages.find(item => item.id === msg.replyTo)?.text || t('message')}</span>
                       </div>
                     )}
                     <div className="message-bubble">
@@ -1322,18 +1368,27 @@ const sendOne = useCallback(async (text, opts = {}) => {
                       <MessageActions
                         ref={messageActionRefs.current[msg.id] ||= { current: null }}
                         msg={msg}
+                        isFailed={msg.failed}
+                        onRetry={() => retryMessage(msg)}
                         isSavedChat={isSavedChat}
-                        onCopy={() => { navigator.clipboard.writeText(msg.text || ''); showToast(t('copied'), 'info'); }}
+                        onCopy={async () => {
+                          try { await navigator.clipboard.writeText(msg.text || ''); showToast(t('copied'), 'info'); }
+                          catch { showToast(t('errorGeneric'), 'error'); }
+                        }}
                         onReply={() => setReplyTo(msg)}
-                        onForward={() => { navigator.clipboard.writeText(msg.text || ''); showToast(t('forwardCopied'), 'info'); }}
+                        onForward={async () => {
+                          try { await navigator.clipboard.writeText(msg.text || ''); showToast(t('forwardCopied'), 'info'); }
+                          catch { showToast(t('errorGeneric'), 'error'); }
+                        }}
                         onSaveToSaved={async () => {
-                          await saveMessageToSaved(msg, attachments[msg.id] || []);
-                          showToast(t('savedToSaved'), 'info');
+                          const { error } = await saveMessageToSaved(msg, attachments[msg.id] || []);
+                          showToast(error ? t('errorSaveItem') : t('savedToSaved'), error ? 'error' : 'info');
                         }}
                         onDeleteForEveryone={async () => {
                           if (!window.confirm(t('confirmDeleteMessage'))) return;
-                          await deleteMessageForEveryone(msg.id);
-                          showToast(t('messageDeletedOk'), 'info');
+                          const { error } = await deleteMessageForEveryone(msg.id);
+                          if (error) showToast(t('errorGeneric'), 'error');
+                          else showToast(t('messageDeletedOk'), 'info');
                         }}
                         t={t}
                       />
@@ -1622,7 +1677,7 @@ function formatBytes(n, lang) {
 // carrying over attachments so images/files round-trip with the note.
 async function saveMessageToSaved(msg, attachments = []) {
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session) return;
+  if (!session) return { error: new Error('Not authenticated') };
   const firstAtt = attachments[0];
   const kind = firstAtt
     ? (firstAtt.kind === 'image' ? 'image'
@@ -1630,7 +1685,7 @@ async function saveMessageToSaved(msg, attachments = []) {
        : firstAtt.kind === 'audio' ? 'document'
        : 'document')
     : (msg.text ? 'note' : 'forward');
-  await supabase.from('saved_messages').insert({
+  const { error } = await supabase.from('saved_messages').insert({
     user_id: session.user.id,
     kind,
     text: msg.text || null,
@@ -1639,6 +1694,7 @@ async function saveMessageToSaved(msg, attachments = []) {
     mime_type: firstAtt?.mime_type || null,
     size_bytes: firstAtt?.size_bytes || null,
   });
+  return { error };
 }
 
 // Avatar: img if src exists, otherwise a Discord-style default avatar.

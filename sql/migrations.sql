@@ -98,12 +98,31 @@ create table if not exists public.chat_clears (
   primary key (user_id, chat_id)
 );
 
+create table if not exists public.hidden_chats (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  profile_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, profile_id)
+);
+
+alter table public.hidden_chats enable row level security;
+drop policy if exists "hidden_chats_read" on public.hidden_chats;
+drop policy if exists "hidden_chats_write" on public.hidden_chats;
+create policy "hidden_chats_read" on public.hidden_chats for select using (user_id = auth.uid());
+create policy "hidden_chats_write" on public.hidden_chats for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
 -- 6. messages: harden --------------------------------------
 -- add deleted_for_everyone flag so a sender can recall a message
 alter table public.messages
   add column if not exists deleted_for_everyone boolean not null default false,
   add column if not exists updated_at timestamptz not null default now(),
   add column if not exists reply_to uuid references public.messages(id) on delete set null;
+
+-- Allow only the sender to recall/update their own messages.
+drop policy if exists "messages_update" on public.messages;
+create policy "messages_update" on public.messages
+  for update using (sender_id = auth.uid())
+  with check (sender_id = auth.uid());
 
 -- 7. RLS ----------------------------------------------------
 -- Enable RLS on new tables and allow owner-only access.
@@ -247,34 +266,37 @@ create or replace function public.get_or_create_chat(user_a uuid, user_b uuid)
 returns uuid
 language plpgsql
 security definer
-as $$
+set search_path = public
+as $
 declare
+  p_a uuid := user_a;
+  p_b uuid := user_b;
   found_id uuid;
   lo uuid;
   hi uuid;
 begin
   -- self-chat: deterministic id
-  if user_a = user_b then
-    select id into found_id from public.chats
-      where user_a = user_a and user_b = user_b limit 1;
+  if p_a = p_b then
+    select c.id into found_id from public.chats c
+      where c.user_a = p_a and c.user_b = p_b limit 1;
     if found_id is null then
       insert into public.chats (user_a, user_b)
-        values (user_a, user_b)
+        values (p_a, p_b)
         returning id into found_id;
     end if;
     return found_id;
   end if;
 
   -- pair chat: always store with (lo, hi) ordering so the (a,b)/(b,a) lookup works
-  if user_a < user_b then
-    lo := user_a; hi := user_b;
+  if p_a < p_b then
+    lo := p_a; hi := p_b;
   else
-    lo := user_b; hi := user_a;
+    lo := p_b; hi := p_a;
   end if;
 
-  select id into found_id from public.chats
-    where (user_a = lo and user_b = hi)
-       or (user_a = hi and user_b = lo)
+  select c.id into found_id from public.chats c
+    where (c.user_a = lo and c.user_b = hi)
+       or (c.user_a = hi and c.user_b = lo)
     limit 1;
 
   if found_id is null then
