@@ -854,65 +854,94 @@ const sendOne = useCallback(async (text, opts = {}) => {
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const chatMenuRef = useRef(null);
+  const [chatContextMenu, setChatContextMenu] = useState(null);
 
   useEffect(() => {
-    if (!chatMenuOpen) return;
+    if (!chatMenuOpen && !chatContextMenu) return;
+
     const onDown = (e) => {
-      if (chatMenuRef.current && !chatMenuRef.current.contains(e.target)) {
+      if (chatMenuOpen && chatMenuRef.current && !chatMenuRef.current.contains(e.target)) {
         setChatMenuOpen(false);
       }
+      if (chatContextMenu && !e.target.closest('.chat-menu')) {
+        setChatContextMenu(null);
+      }
     };
+
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [chatMenuOpen]);
+  }, [chatMenuOpen, chatContextMenu]);
 
   const isBlocked = activeChat && blockedIds.includes(activeChat);
   const isMuted = chatIdMap[activeChat] && mutedChats.includes(chatIdMap[activeChat]);
+  const contextChatId = chatContextMenu?.chatId || null;
+  const contextIsSaved = contextChatId === SAVED_MESSAGES_ID;
+  const contextIsBlocked = contextChatId && blockedIds.includes(contextChatId);
+  const contextChatDbId = contextChatId ? chatIdMap[contextChatId] : null;
+  const contextIsMuted = contextChatDbId && mutedChats.includes(contextChatDbId);
 
-  const handleToggleBlock = async () => {
-    if (!activeChat || isSavedChat || !session) return;
-    if (isBlocked) {
-      const { error } = await unblockUser(session.user.id, activeChat);
+  const handleToggleBlock = async (targetId = activeChat) => {
+    const targetIsSaved = targetId === SAVED_MESSAGES_ID;
+    const targetIsBlocked = blockedIds.includes(targetId);
+    if (!targetId || targetIsSaved || !session) return;
+
+    if (targetIsBlocked) {
+      const { error } = await unblockUser(session.user.id, targetId);
       if (error) { showToast(t('errorGeneric'), 'error'); return; }
-      setBlockedIds(prev => prev.filter(id => id !== activeChat));
+      setBlockedIds(prev => prev.filter(id => id !== targetId));
       showToast(t('unblocked'), 'info');
     } else {
-      const { error } = await blockUser(session.user.id, activeChat);
+      const { error } = await blockUser(session.user.id, targetId);
       if (error) { showToast(t('errorGeneric'), 'error'); return; }
-      setBlockedIds(prev => prev.includes(activeChat) ? prev : [...prev, activeChat]);
+      setBlockedIds(prev => prev.includes(targetId) ? prev : [...prev, targetId]);
       showToast(t('blocked'), 'info');
     }
+
     setChatMenuOpen(false);
+    setChatContextMenu(null);
   };
 
-  const handleToggleMute = async () => {
-    if (!activeChat || isSavedChat || !session) return;
-    const chatId = chatIdMap[activeChat];
-    if (!chatId) return;
-    if (isMuted) {
-      const { error } = await supabase.from('chat_mutes').delete().eq('user_id', session.user.id).eq('chat_id', chatId);
+  const handleToggleMute = async (targetId = activeChat) => {
+    const targetIsSaved = targetId === SAVED_MESSAGES_ID;
+    const targetChatId = chatIdMap[targetId];
+    const targetIsMuted = targetChatId && mutedChats.includes(targetChatId);
+    if (!targetId || targetIsSaved || !session || !targetChatId) return;
+
+    if (targetIsMuted) {
+      const { error } = await supabase
+        .from('chat_mutes')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('chat_id', targetChatId);
       if (error) { showToast(t('errorGeneric'), 'error'); return; }
-      setMutedChats(prev => prev.filter(id => id !== chatId));
+      setMutedChats(prev => prev.filter(id => id !== targetChatId));
       showToast(t('unmuted'), 'info');
     } else {
-      const { error } = await muteChat(session.user.id, chatId);
+      const { error } = await muteChat(session.user.id, targetChatId);
       if (error) { showToast(t('errorGeneric'), 'error'); return; }
-      setMutedChats(prev => prev.includes(chatId) ? prev : [...prev, chatId]);
+      setMutedChats(prev => prev.includes(targetChatId) ? prev : [...prev, targetChatId]);
       showToast(t('muted'), 'info');
     }
+
     setChatMenuOpen(false);
+    setChatContextMenu(null);
   };
 
-  const handleClearChat = async () => {
-    if (!activeChat || isSavedChat || !session) return;
+  const handleClearChat = async (targetId = activeChat) => {
+    const targetIsSaved = targetId === SAVED_MESSAGES_ID;
+    if (!targetId || targetIsSaved || !session) return;
     if (!window.confirm(t('confirmClear'))) return;
-    const chatId = chatIdMap[activeChat];
-    if (!chatId) { showToast(t('errorChatInit'), 'error'); return; }
-    const { error: clearError } = await clearChat(session.user.id, chatId);
+
+    const targetChatId = chatIdMap[targetId];
+    if (!targetChatId) { showToast(t('errorChatInit'), 'error'); return; }
+
+    const { error: clearError } = await clearChat(session.user.id, targetChatId);
     if (clearError) { showToast(t('errorGeneric'), 'error'); return; }
-    // Only clear this chat's messages + attachments; don't wipe other chats' attachments.
-    setMessages(prev => ({ ...prev, [activeChat]: [] }));
-    const msgIds = (messages[activeChat] || []).map(m => m.id);
+
+    const targetMessages = messages[targetId] || [];
+    setMessages(prev => ({ ...prev, [targetId]: [] }));
+    const msgIds = targetMessages.map(m => m.id);
+
     if (msgIds.length) {
       setAttachments(prev => {
         const next = { ...prev };
@@ -920,17 +949,26 @@ const sendOne = useCallback(async (text, opts = {}) => {
         return next;
       });
     }
+
     showToast(t('cleared'), 'info');
     setChatMenuOpen(false);
+    setChatContextMenu(null);
   };
 
-  const handleDeleteChat = async () => {
-    if (!activeChat || isSavedChat || !session) return;
+  const handleDeleteChat = async (targetId = activeChat) => {
+    const targetIsSaved = targetId === SAVED_MESSAGES_ID;
+    if (!targetId || targetIsSaved || !session) return;
     if (!window.confirm(t('confirmDelete'))) return;
-    const msgIds = (messages[activeChat] || []).map(m => m.id);
-    const { error: hideError } = await supabase.from('hidden_chats').upsert({ user_id: session.user.id, profile_id: activeChat });
+
+    const targetMessages = messages[targetId] || [];
+    const msgIds = targetMessages.map(m => m.id);
+    const { error: hideError } = await supabase
+      .from('hidden_chats')
+      .upsert({ user_id: session.user.id, profile_id: targetId });
+
     if (hideError) { showToast(t('errorGeneric'), 'error'); return; }
-    setMessages(prev => ({ ...prev, [activeChat]: [] }));
+
+    setMessages(prev => ({ ...prev, [targetId]: [] }));
     if (msgIds.length) {
       setAttachments(prev => {
         const next = { ...prev };
@@ -938,13 +976,14 @@ const sendOne = useCallback(async (text, opts = {}) => {
         return next;
       });
     }
-    setHiddenIds(prev => prev.includes(activeChat) ? prev : [...prev, activeChat]);
-    setFavorites(prev => prev.filter(id => id !== activeChat));
+
+    setHiddenIds(prev => prev.includes(targetId) ? prev : [...prev, targetId]);
+    setFavorites(prev => prev.filter(id => id !== targetId));
     showToast(t('chatDeleted'), 'info');
     setChatMenuOpen(false);
-    setActiveChat(null);
+    setChatContextMenu(null);
+    if (activeChat === targetId) setActiveChat(null);
   };
-
   // load my block list once
   useEffect(() => {
     if (!session) return;
@@ -1129,6 +1168,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
         )}
 
         <div className="chat-tabs">
+          <span className={`tab-liquid ${showFavorites ? 'favorites' : ''}`} aria-hidden="true" />
           <button className={`tab ${!showFavorites ? 'active' : ''}`} onClick={() => setShowFavorites(false)}>
             {t('allChats')}
           </button>
@@ -1150,10 +1190,15 @@ const sendOne = useCallback(async (text, opts = {}) => {
                 key={chat.id}
                 className={`chat-item ${activeChat === chat.id ? 'active' : ''} ${chat.isSaved ? 'is-saved' : ''}`}
                 onClick={() => {
+                  setChatContextMenu(null);
                   setActiveChat(chat.id);
                   if (window.innerWidth < 768) setSidebarOpen(false);
                 }}
-              >
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setChatContextMenu({ chatId: chat.id, x: e.clientX + 8, y: e.clientY + 8 });
+                }}              >
                 <div className="chat-avatar-wrapper">
                   {chat.isSaved ? (
                     <div className="chat-avatar saved-avatar" aria-hidden>
@@ -1179,7 +1224,26 @@ const sendOne = useCallback(async (text, opts = {}) => {
               </div>
             ))
           )}
-        </div>
+                  {chatContextMenu && (
+            <ChatMenu
+              isSaved={contextIsSaved}
+              isBlocked={contextIsBlocked}
+              isMuted={contextIsMuted}
+              isFavorite={favorites.includes(contextChatId)}
+              floating
+              position={{ left: chatContextMenu.x, top: chatContextMenu.y }}
+              onToggleBlock={() => handleToggleBlock(contextChatId)}
+              onToggleMute={() => handleToggleMute(contextChatId)}
+              onClear={() => handleClearChat(contextChatId)}
+              onDelete={() => handleDeleteChat(contextChatId)}
+              onToggleFavorite={() => {
+                toggleFavorite(contextChatId);
+                setChatContextMenu(null);
+              }}
+              onClose={() => setChatContextMenu(null)}
+              t={t}
+            />
+          )}</div>
       </aside>
 
       {/* Main Chat Area */}

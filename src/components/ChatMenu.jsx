@@ -7,7 +7,7 @@ import './ChatMenu.css';
 function ChatMenu({
   isSaved, isBlocked, isMuted, isFavorite,
   onToggleBlock, onToggleMute, onClear, onDelete, onToggleFavorite,
-  onClose, t,
+  onClose, t, floating = false, position = null,
 }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -16,7 +16,7 @@ function ChatMenu({
   }, [onClose]);
 
   return (
-    <div className="chat-menu" role="menu">
+    <div className={`chat-menu ${floating ? 'chat-menu-floating' : ''}`} role="menu" style={floating ? position : undefined}>
       {!isSaved && (
         <button className="chat-menu-item" role="menuitem" onClick={onToggleFavorite}>
           <Star size={16} fill={isFavorite ? 'currentColor' : 'none'} />

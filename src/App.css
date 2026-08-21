@@ -599,46 +599,108 @@
 
 /* === TABS — editorial underline style === */
 .chat-tabs {
+  position: relative;
   display: flex;
   gap: 0;
-  padding: 0 22px;
+  padding: 6px 22px;
   border-bottom: 1px solid var(--color-border-strong);
   background: var(--color-surface);
   flex-shrink: 0;
+  isolation: isolate;
 }
+
+.tab-liquid {
+  position: absolute;
+  z-index: 0;
+  top: 5px;
+  bottom: 5px;
+  left: 22px;
+  width: calc(50% - 22px);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 38%, var(--color-border-strong));
+  border-radius: 18px 18px 13px 13px;
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255,255,255,0.2), transparent 30%),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 18%, transparent), rgba(255,255,255,0.04));
+  box-shadow:
+    0 5px 14px color-mix(in srgb, var(--color-primary) 18%, transparent),
+    inset 0 1px 0 rgba(255,255,255,0.22),
+    inset 0 -1px 0 rgba(0,0,0,0.12);
+  backdrop-filter: blur(10px) saturate(1.25);
+  pointer-events: none;
+  transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.tab-liquid::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 18%;
+  width: 28%;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.42);
+  filter: blur(1px);
+}
+
+.tab-liquid::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 13px;
+  height: 9px;
+  border-radius: 0 0 9px 9px;
+  background: color-mix(in srgb, var(--color-primary) 24%, transparent);
+  transform: translateX(-50%);
+  filter: blur(0.2px);
+}
+
+.tab-liquid.favorites {
+  transform: translateX(100%);
+}
+
 .tab {
+  position: relative;
+  z-index: 1;
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 12px 12px;
+  min-height: 34px;
+  padding: 7px 12px;
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-weight: 600;
   color: var(--color-muted);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-radius: 14px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   cursor: pointer;
-  position: relative;
-  margin-bottom: -1px;
-  transition: color 120ms ease, border-color 120ms ease;
+  transition: color 180ms ease, transform 180ms ease;
 }
-.tab:hover { color: var(--color-foreground); }
+
+.tab:hover {
+  color: var(--color-foreground);
+}
+
 .tab.active {
   color: var(--color-foreground);
-  border-bottom-color: var(--color-primary);
 }
+
+.tab:active {
+  transform: scale(0.97);
+}
+
 .tab-badge {
   min-width: 18px;
   height: 16px;
   padding: 0 5px;
   background: var(--color-primary);
   color: var(--color-on-primary);
-  border-radius: 2px;
+  border-radius: 999px;
   font-family: var(--font-mono);
   font-size: 0.625rem;
   font-weight: 600;
@@ -646,7 +708,6 @@
   align-items: center;
   justify-content: center;
 }
-
 /* === EMPTY STATE === */
 .empty-state {
   display: flex;

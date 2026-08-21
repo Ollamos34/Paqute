@@ -49,3 +49,11 @@
   color: var(--color-muted);
   line-height: 1.4;
 }
+
+.chat-menu-floating {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(260px, calc(100vw - 20px));
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
+}
