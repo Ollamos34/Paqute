@@ -1330,7 +1330,7 @@ const sendOne = useCallback(async (text, opts = {}) => {
                       if (msg.pending || msg.deleted) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      messageActionRefs.current[msg.id]?.current?.open();
+                      messageActionRefs.current[msg.id]?.current?.openAt(e.clientX + 8, e.clientY + 8);
                     }}
                     onTouchStart={onTouchStart}
                     title={canReply ? t('replyHint') || 'Double-click to reply' : undefined}

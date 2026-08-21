@@ -267,7 +267,7 @@ returns uuid
 language plpgsql
 security definer
 set search_path = public
-as $
+as $$
 declare
   p_a uuid := user_a;
   p_b uuid := user_b;

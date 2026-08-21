@@ -104,12 +104,40 @@ create trigger trg_handle_new_user
 alter table public.messages
   add column if not exists client_id text;
 
--- 3b. content column alias ------------------------------------
--- The client reads `messages.content`; base schema has `text`.
--- Add a generated column mirroring text so both read paths work.
-alter table public.messages
-  add column if not exists content text generated always as (text) stored;
+-- 3b. content/text compatibility
+-- The client writes messages.content while the base schema historically used text.
+alter table public.messages drop column if exists content;
+alter table public.messages add column if not exists content text;
 
+update public.messages
+set content = text
+where content is null;
+
+create or replace function public.sync_message_content()
+returns trigger
+language plpgsql
+as $$
+begin
+  if TG_OP = 'INSERT' then
+    if NEW.content is null then
+      NEW.content := coalesce(NEW.text, '');
+    else
+      NEW.text := NEW.content;
+    end if;
+  elsif NEW.text is distinct from OLD.text then
+    NEW.content := NEW.text;
+  elsif NEW.content is distinct from OLD.content then
+    NEW.text := NEW.content;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+drop trigger if exists trg_sync_message_content on public.messages;
+create trigger trg_sync_message_content
+before insert or update of text, content on public.messages
+for each row execute function public.sync_message_content();
 -- Unique per chat so the same client_id can be reused across
 -- different chats (e.g. after retry) without collision.
 create unique index if not exists uq_messages_chat_client_id

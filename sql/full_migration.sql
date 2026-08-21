@@ -419,8 +419,8 @@ declare
 begin
   -- self-chat (Saved Messages)
   if p_a = p_b then
-    select id into found_id from public.chats
-      where user_a = p_a and user_b = p_b
+    select c.id into found_id from public.chats c
+      where c.user_a = p_a and c.user_b = p_b
       limit 1;
     if found_id is null then
       insert into public.chats (user_a, user_b)
@@ -437,9 +437,9 @@ begin
     lo := p_b; hi := p_a;
   end if;
 
-  select id into found_id from public.chats
-    where (user_a = lo and user_b = hi)
-       or (user_a = hi and user_b = lo)
+  select c.id into found_id from public.chats c
+    where (c.user_a = lo and c.user_b = hi)
+       or (c.user_a = hi and c.user_b = lo)
     limit 1;
 
   if found_id is null then
@@ -504,15 +504,42 @@ create policy "attachments_storage_write" on storage.objects
   );
 
 -- ===========================================================
--- 11. CONTENT COLUMN ALIAS (fixes client that reads m.content)
--- ===========================================================
--- The client uses `messages.content` for the message body, but the
--- base schema creates `text`. Add a generated `content` column that
--- mirrors `text` so both read paths work.
-alter table public.messages
-  add column if not exists content text generated always as (text) stored;
+-- 11. MESSAGE CONTENT COMPATIBILITY
+-- The client writes content while the original schema used text.
+-- Keep both writable and synchronize them automatically.
 
--- ===========================================================
+alter table public.messages drop column if exists content;
+alter table public.messages add column if not exists content text;
+
+update public.messages
+set content = text
+where content is null;
+
+create or replace function public.sync_message_content()
+returns trigger
+language plpgsql
+as $$
+begin
+  if TG_OP = 'INSERT' then
+    if NEW.content is null then
+      NEW.content := coalesce(NEW.text, '');
+    else
+      NEW.text := NEW.content;
+    end if;
+  elsif NEW.text is distinct from OLD.text then
+    NEW.content := NEW.text;
+  elsif NEW.content is distinct from OLD.content then
+    NEW.text := NEW.content;
+  end if;
+
+  return NEW;
+end;
+$$;
+
+drop trigger if exists trg_sync_message_content on public.messages;
+create trigger trg_sync_message_content
+before insert or update of text, content on public.messages
+for each row execute function public.sync_message_content();
 -- 12. REALTIME PUBLICATION
 -- ===========================================================
 -- New tables are NOT in the supabase_realtime publication by default.
